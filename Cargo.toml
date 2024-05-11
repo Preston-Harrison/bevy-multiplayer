@@ -9,6 +9,7 @@ edition = "2021"
 bevy = { version = "0.13.2", features = ["serialize"] }
 bevy_renet = { version = "0.0.11", features = ["serde"] }
 bincode = "1.3.3"
+rand = "0.8.5"
 serde = { version = "1.0.196", features = ["derive"] }
 
 [profile.dev]
