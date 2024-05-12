@@ -1,11 +1,10 @@
-/// NOTE: Messages are considered unreliable and unordered, events are considered
-/// reliable and unordered.
 use bevy::prelude::*;
+use bevy_renet::renet::{DefaultChannel, RenetServer};
 use serde::{Deserialize, Serialize};
 
 use crate::{game, impl_bytes};
 
-use self::{input::InputBuffer, read::ClientMessages};
+use self::{input::InputBuffer, read::ClientMessages, tick::Tick};
 
 pub type PlayerId = u64;
 
@@ -26,7 +25,7 @@ pub trait Interpolate {
 /// Allows components of an entity to interpolate to state updates sent by the server.
 #[derive(Component)]
 pub struct Interpolated<T: Component + Interpolate> {
-    target: T,
+    pub target: T,
 }
 
 pub fn interpolate<T: Component + Interpolate>(mut q: Query<(&mut T, &Interpolated<T>)>) {
@@ -47,10 +46,6 @@ pub struct Prespawned {
 pub struct ServerObject(u64);
 
 impl ServerObject {
-    pub fn rand() -> Self {
-        Self(rand::random())
-    }
-
     pub fn from_u64(id: u64) -> Self {
         Self(id)
     }
@@ -77,25 +72,48 @@ pub fn replace_prespawned_on_client(
     }
 }
 
-/// Unreliable messages from the client to server.
-#[derive(Serialize, Deserialize, Clone)]
-pub enum MsgFromClient {
-    Input(input::Input),
+pub fn broadcast_transforms(
+    mut server: ResMut<RenetServer>,
+    objs: Query<(&ServerObject, &Transform)>,
+    tick: Res<Tick>,
+) {
+    for (so, transform) in objs.iter() {
+        server.broadcast_message(
+            DefaultChannel::Unreliable,
+            UMFromServer::TransformUpdate(ComponentUpdate {
+                component: transform.clone(),
+                server_obj: so.as_u64(),
+                tick: tick.current,
+            }),
+        );
+    }
 }
-impl_bytes!(MsgFromClient);
 
 #[derive(Serialize, Deserialize, Clone)]
-pub struct MsgFromClientWithId {
+pub struct InputWithTick {
+    input: input::Input,
+    tick: u64,
+}
+
+/// Unreliable messages from the client to server.
+#[derive(Serialize, Deserialize, Clone)]
+pub enum UMFromClient {
+    Input(InputWithTick),
+}
+impl_bytes!(UMFromClient);
+
+#[derive(Clone)]
+pub struct UMFromClientWithId {
     id: PlayerId,
-    msg: MsgFromClient,
+    msg: UMFromClient,
 }
 
 /// Unreliable messages from the server to client.
 #[derive(Serialize, Deserialize, Clone)]
-pub enum MsgFromServer {
+pub enum UMFromServer {
     TransformUpdate(ComponentUpdate<Transform>),
 }
-impl_bytes!(MsgFromServer);
+impl_bytes!(UMFromServer);
 
 /// An authoritative state update from the server on a certain tick.
 #[derive(Serialize, Deserialize, Clone)]
@@ -106,7 +124,7 @@ pub struct ComponentUpdate<T: Component + Clone> {
 }
 
 #[derive(Serialize, Deserialize, Clone)]
-pub enum EventFromServer {
+pub enum RUMFromServer {
     PlayerJoined {
         server_obj: u64,
         id: PlayerId,
@@ -115,8 +133,24 @@ pub enum EventFromServer {
     PlayerLeft {
         server_obj: u64,
     },
+    AdjustTick(i8),
+    BroadcastTick(u64),
 }
-impl_bytes!(EventFromServer);
+impl_bytes!(RUMFromServer);
+
+#[derive(Serialize, Deserialize, Clone)]
+pub enum RUMFromClient {
+    BroadcastTick(u64),
+    /// Client sends this when it is in the game and ready to receive game updates.
+    StartedGame,
+}
+impl_bytes!(RUMFromClient);
+
+#[derive(Clone)]
+pub struct RUMFromClientWithId {
+    id: u64,
+    msg: RUMFromClient,
+}
 
 pub fn apply_transform_on_client(
     msgs: Res<ClientMessages>,
@@ -125,15 +159,32 @@ pub fn apply_transform_on_client(
     mut commands: Commands,
     i_buf: Res<InputBuffer>,
 ) {
+    let max_update = msgs
+        .unreliable
+        .iter()
+        .filter_map(|v| match v {
+            UMFromServer::TransformUpdate(update) => Some(update.tick),
+            _ => None,
+        })
+        .max();
     for msg in msgs.unreliable.iter() {
-        if let MsgFromServer::TransformUpdate(update) = msg {
+        if let UMFromServer::TransformUpdate(update) = msg {
+            if update.tick != max_update.unwrap() {
+                continue;
+            }
             for (entity, mut transform, server_obj, local) in t_q.iter_mut() {
                 if server_obj.as_u64() == update.server_obj {
                     if local.is_some() {
+                        info!(
+                            "resetting transform on tick {} to tick {}",
+                            tick.current - 1,
+                            update.tick
+                        );
                         *transform = update.component.clone();
-                        let ticks = tick.current() - update.tick;
-                        for n in 0..ticks {
+                        let ticks = tick.current.saturating_sub(update.tick);
+                        for n in (1..ticks).rev() {
                             if let Some(input) = i_buf.inputs.get(n as usize) {
+                                info!("simming tick {} ({} ticks ago)", tick.current - n, n);
                                 game::move_player(&mut transform, input);
                             }
                         }
@@ -159,22 +210,27 @@ pub mod read {
     use bevy::prelude::*;
     use bevy_renet::renet::{DefaultChannel, RenetClient, RenetServer};
 
-    use super::{EventFromServer, MsgFromClient, MsgFromClientWithId, MsgFromServer};
+    use super::{
+        RUMFromClient, RUMFromClientWithId, RUMFromServer, UMFromClient, UMFromClientWithId,
+        UMFromServer,
+    };
 
     #[derive(Default, Resource, Clone)]
     pub struct ServerMessages {
-        pub unreliable: Vec<MsgFromClientWithId>,
+        pub unreliable: Vec<UMFromClientWithId>,
+        pub reliable: Vec<RUMFromClientWithId>,
     }
 
     pub fn recv_on_server(mut server: ResMut<RenetServer>, mut messages: ResMut<ServerMessages>) {
         messages.unreliable.clear();
+        messages.reliable.clear();
 
         let clients = server.clients_id_iter().collect::<Vec<_>>();
         for client in clients {
             while let Some(message) = server.receive_message(client, DefaultChannel::Unreliable) {
-                if let Ok(um) = MsgFromClient::try_from(message) {
+                if let Ok(um) = UMFromClient::try_from(message) {
                     // TODO: get player id from client id instead of just using client id.
-                    let msg = MsgFromClientWithId {
+                    let msg = UMFromClientWithId {
                         id: client.raw(),
                         msg: um,
                     };
@@ -183,28 +239,50 @@ pub mod read {
                     warn!("Received unparsable unreliable message from server");
                 };
             }
+
+            while let Some(message) =
+                server.receive_message(client, DefaultChannel::ReliableUnordered)
+            {
+                if let Ok(um) = RUMFromClient::try_from(message) {
+                    // TODO: get player id from client id instead of just using client id.
+                    let msg = RUMFromClientWithId {
+                        id: client.raw(),
+                        msg: um,
+                    };
+                    messages.reliable.push(msg);
+                } else {
+                    warn!("Received unparsable reliable unordered message from server");
+                };
+            }
         }
     }
 
     #[derive(Default, Resource, Clone)]
     pub struct ClientMessages {
-        pub unreliable: Vec<MsgFromServer>,
-        pub reliable: Vec<EventFromServer>,
+        pub unreliable: Vec<UMFromServer>,
+        pub reliable: Vec<RUMFromServer>,
+    }
+
+    impl ClientMessages {
+        fn clear(&mut self) {
+            self.unreliable.clear();
+            self.reliable.clear();
+        }
     }
 
     pub fn recv_on_client(mut client: ResMut<RenetClient>, mut messages: ResMut<ClientMessages>) {
-        messages.unreliable.clear();
+        messages.clear();
+
         while let Some(message) = client.receive_message(DefaultChannel::Unreliable) {
-            if let Ok(um) = MsgFromServer::try_from(message) {
+            if let Ok(um) = UMFromServer::try_from(message) {
                 messages.unreliable.push(um);
             } else {
                 warn!("Received unparsable unreliable message from server");
             };
         }
 
-        messages.reliable.clear();
         while let Some(message) = client.receive_message(DefaultChannel::ReliableUnordered) {
-            if let Ok(um) = EventFromServer::try_from(message) {
+            if let Ok(um) = RUMFromServer::try_from(message) {
                 messages.reliable.push(um);
             } else {
                 warn!("Received unparsable unreliable message from server");
@@ -214,20 +292,104 @@ pub mod read {
 }
 
 pub mod tick {
-    use bevy::prelude::*;
+    use std::time::Duration;
 
-    pub fn increment_tick(mut tick: ResMut<Tick>) {
-        tick.current += 1;
-    }
+    use bevy::prelude::*;
+    use bevy_renet::renet::{ClientId, DefaultChannel, RenetClient, RenetServer};
+
+    use super::{
+        read::{ClientMessages, ServerMessages},
+        RUMFromClient, RUMFromServer,
+    };
 
     #[derive(Resource, Default)]
     pub struct Tick {
-        current: u64,
+        pub current: u64,
+
+        /// The server requested tick adjustment to keep the client ahead of the server.
+        pub adjust: i8,
     }
 
-    impl Tick {
-        pub fn current(&self) -> u64 {
-            self.current
+    pub fn increment_tick_on_server(mut tick: ResMut<Tick>) {
+        tick.current += 1;
+        info!("incremented tick to {}", tick.current);
+    }
+
+    pub fn set_adjustment_tick_on_client(mut tick: ResMut<Tick>, msgs: Res<ClientMessages>) {
+        for msg in msgs.reliable.iter() {
+            if let RUMFromServer::AdjustTick(adjust) = msg {
+                tick.adjust = *adjust;
+            }
+        }
+    }
+
+    pub fn initialize_tick_on_client(mut cmds: Commands, msgs: Res<ClientMessages>) {
+        for msg in msgs.reliable.iter() {
+            if let RUMFromServer::BroadcastTick(tick) = msg {
+                cmds.insert_resource(Tick {
+                    current: *tick + 5,
+                    adjust: 0,
+                });
+            }
+        }
+    }
+
+    pub fn ask_for_game_updates_on_client(mut client: ResMut<RenetClient>) {
+        client.send_message(
+            DefaultChannel::ReliableUnordered,
+            RUMFromClient::StartedGame,
+        );
+    }
+
+    #[derive(Resource)]
+    pub struct TickBroadcastTimer {
+        timer: Timer,
+    }
+
+    impl Default for TickBroadcastTimer {
+        fn default() -> Self {
+            Self {
+                timer: Timer::new(Duration::from_secs(5), TimerMode::Repeating),
+            }
+        }
+    }
+
+    pub fn broadcast_tick_on_client(
+        time: Res<Time>,
+        tick: Res<Tick>,
+        mut timer: ResMut<TickBroadcastTimer>,
+        mut client: ResMut<RenetClient>,
+    ) {
+        timer.timer.tick(time.delta());
+        if timer.timer.just_finished() {
+            info!("sending current tick");
+            client.send_message(
+                DefaultChannel::ReliableUnordered,
+                RUMFromClient::BroadcastTick(tick.current),
+            );
+        }
+    }
+
+    pub fn broadcast_adjustment_on_server(
+        tick: Res<Tick>,
+        msgs: Res<ServerMessages>,
+        mut server: ResMut<RenetServer>,
+    ) {
+        for msg in msgs.reliable.iter() {
+            if let RUMFromClient::BroadcastTick(client_tick) = msg.msg {
+                // TODO: check for overflows
+                let diff = (tick.current as i64 - client_tick as i64) as i8;
+                // Client should be 2 ticks ahead.
+                let adjustment = diff + 2;
+                if adjustment != 0 {
+                    info!("sending adjustment tick");
+                    server.send_message(
+                        ClientId::from_raw(msg.id),
+                        DefaultChannel::ReliableUnordered,
+                        RUMFromServer::AdjustTick(adjustment),
+                    );
+                }
+            }
         }
     }
 }
@@ -237,33 +399,37 @@ pub mod input {
     use bevy_renet::renet::{DefaultChannel, RenetClient};
     use serde::{Deserialize, Serialize};
 
-    use crate::{impl_bytes, utils::Queue};
+    use crate::{
+        impl_bytes,
+        netcode::InputWithTick,
+        utils::{Buffer, Queue},
+    };
 
-    use super::{read::ServerMessages, MsgFromClient, PlayerId};
+    use super::{read::ServerMessages, tick::Tick, PlayerId, UMFromClient};
 
     #[derive(Resource)]
     pub struct InputBuffer {
-        pub inputs: Queue<Input>,
+        pub inputs: Buffer<Input>,
     }
 
     impl Default for InputBuffer {
         fn default() -> Self {
             Self {
-                inputs: Queue::new(50),
+                inputs: Buffer::new(20),
             }
         }
     }
 
     #[derive(Resource)]
     pub struct InputMapBuffer {
-        pub inputs: Queue<HashMap<PlayerId, Input>>,
+        pub inputs: Buffer<HashMap<PlayerId, Input>>,
     }
 
     impl Default for InputMapBuffer {
         fn default() -> Self {
-            Self {
-                inputs: Queue::new(50),
-            }
+            let mut inputs = Buffer::new(10);
+            inputs.fill_with(|| HashMap::new());
+            Self { inputs }
         }
     }
 
@@ -280,22 +446,37 @@ pub mod input {
         player_id: PlayerId,
     }
 
-    pub fn read_input_on_server(msgs: Res<ServerMessages>, mut i_buf: ResMut<InputMapBuffer>) {
-        let mut inputs = HashMap::<PlayerId, Input>::new();
+    pub fn read_input_on_server(
+        msgs: Res<ServerMessages>,
+        mut i_buf: ResMut<InputMapBuffer>,
+        tick: Res<Tick>,
+    ) {
+        i_buf.inputs.fill_with(|| HashMap::new());
+
         for msg in msgs.unreliable.iter() {
-            if let MsgFromClient::Input(input) = &msg.msg {
-                inputs.insert(msg.id, input.clone());
+            if let UMFromClient::Input(input) = &msg.msg {
+                if input.tick < tick.current {
+                    warn!("dropped late input");
+                    continue;
+                }
+                let tick_diff = input.tick - tick.current;
+                info!("tick diff: {tick_diff}");
+                if let Some(buf) = i_buf.inputs.get_mut(tick_diff as usize) {
+                    buf.insert(msg.id, input.input.clone());
+                } else {
+                    warn!("dropped input too far in future");
+                }
             }
         }
-
-        i_buf.inputs.push(inputs);
     }
 
     pub fn read_input_on_client(
         key: Res<ButtonInput<KeyCode>>,
         mut i_buf: ResMut<InputBuffer>,
         mut client: ResMut<RenetClient>,
+        tick: Res<Tick>,
     ) {
+        info!("reading input on tick {}", tick.current);
         let mut input = Input { x: 0, y: 0 };
 
         if key.pressed(KeyCode::KeyW) {
@@ -311,10 +492,16 @@ pub mod input {
             input.x += 1;
         }
 
-        i_buf.inputs.push(input.clone());
+        i_buf.inputs.push_front(input.clone());
 
         if input != Input::default() {
-            client.send_message(DefaultChannel::Unreliable, MsgFromClient::Input(input));
+            client.send_message(
+                DefaultChannel::Unreliable,
+                UMFromClient::Input(InputWithTick {
+                    input,
+                    tick: tick.current,
+                }),
+            );
         }
     }
 }
@@ -327,36 +514,65 @@ pub mod conn {
     };
     use bevy_renet::renet::{DefaultChannel, RenetServer, ServerEvent};
 
-    use crate::{game, netcode::EventFromServer};
+    use crate::{
+        game::{self, Player},
+        netcode::RUMFromServer,
+    };
+
+    use super::{read::ServerMessages, tick::Tick, RUMFromClient, ServerObject};
 
     pub fn handle_connect_on_server(
         mut cmds: Commands,
         mut server_events: EventReader<ServerEvent>,
         mut server: ResMut<RenetServer>,
+        player_q: Query<(Entity, &Player, &ServerObject)>,
+        tick: Res<Tick>,
     ) {
         // TODO: broadcast player join/leave events.
         for event in server_events.read() {
             match event {
                 ServerEvent::ClientConnected { client_id } => {
                     info!("client {client_id} connected");
-                    let server_obj = rand::random();
-                    game::spawn_player(
-                        &mut cmds,
-                        server_obj,
-                        client_id.raw(),
-                        Transform::default(),
-                        false,
+                    server.send_message(
+                        *client_id,
+                        DefaultChannel::ReliableUnordered,
+                        RUMFromServer::BroadcastTick(tick.current),
                     );
-                    let join_payload = EventFromServer::PlayerJoined {
-                        server_obj,
-                        id: client_id.raw(),
-                        transform: Transform::default(),
-                    };
-                    server.broadcast_message(DefaultChannel::ReliableUnordered, join_payload);
                 }
                 ServerEvent::ClientDisconnected { client_id, reason } => {
                     info!("client {client_id} disconnected because {reason}");
+                    for (entity, player, server_obj) in player_q.iter() {
+                        if player.id == client_id.raw() {
+                            cmds.entity(entity).despawn_recursive();
+                            let leave_payload = RUMFromServer::PlayerLeft {
+                                server_obj: server_obj.as_u64(),
+                            };
+                            server.broadcast_message(
+                                DefaultChannel::ReliableUnordered,
+                                leave_payload,
+                            );
+                        }
+                    }
                 }
+            }
+        }
+    }
+
+    pub fn send_join_messages_on_server(
+        mut cmds: Commands,
+        msgs: Res<ServerMessages>,
+        mut server: ResMut<RenetServer>,
+    ) {
+        for msg in msgs.reliable.iter() {
+            if let RUMFromClient::StartedGame = msg.msg {
+                let server_obj = rand::random();
+                game::spawn_player(&mut cmds, server_obj, msg.id, Transform::default(), false);
+                let join_payload = RUMFromServer::PlayerJoined {
+                    server_obj,
+                    id: msg.id,
+                    transform: Transform::default(),
+                };
+                server.broadcast_message(DefaultChannel::ReliableUnordered, join_payload);
             }
         }
     }
