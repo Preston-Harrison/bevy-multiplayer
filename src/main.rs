@@ -102,7 +102,7 @@ fn client(server_addr: SocketAddr, socket: UdpSocket, client_id: u64) {
         netcode::tick::ask_for_game_updates_on_client,
     );
 
-    app.add_systems(GameLogic, (game::move_on_client,).chain());
+    app.add_systems(GameLogic, (game::move_on_client, game::move_bullet).chain());
 
     app.add_systems(
         FixedUpdate,
@@ -161,10 +161,15 @@ fn server(server_addr: SocketAddr) {
 
     app.add_systems(
         GameLogic,
-        (game::move_on_server, game::move_npc_on_server).chain(),
+        (
+            game::move_on_server,
+            game::move_npc_on_server,
+            game::move_bullet,
+        )
+            .chain(),
     );
 
-    app.add_systems(Startup, spawn_npc_on_server);
+    app.add_systems(Startup, (spawn_npc_on_server, game::spawn_startup_bullet));
 
     app.add_systems(
         FixedUpdate,

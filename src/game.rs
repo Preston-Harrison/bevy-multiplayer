@@ -1,13 +1,15 @@
 use std::time::Duration;
 
 use bevy::{ecs::schedule::ScheduleLabel, prelude::*};
+use serde::{Deserialize, Serialize};
 
 use crate::{
     netcode::{
         input::{Input, InputBuffer, InputMapBuffer},
         read::ClientMessages,
         tick::Tick,
-        ClientInfo, LocalPlayer, NetworkEntityType, PlayerId, RUMFromServer, ServerObject,
+        ClientInfo, Deterministic, LocalPlayer, NetworkEntityType, PlayerId, RUMFromServer,
+        ServerObject,
     },
     TICK_TIME,
 };
@@ -100,11 +102,11 @@ pub fn move_on_server(
     }
 }
 
-fn square(color: Color) -> SpriteBundle {
+fn square(color: Color, size: f32) -> SpriteBundle {
     SpriteBundle {
         sprite: Sprite {
             color,
-            custom_size: Some(Vec2::new(10.0, 10.0)),
+            custom_size: Some(Vec2::new(size, size)),
             ..Default::default()
         },
         ..Default::default()
@@ -153,18 +155,29 @@ pub fn spawn_network_entities_on_client(
                 id,
                 transform,
             } => spawn_player(&mut cmds, *server_obj, *id, *transform, c_info.id == *id),
-            RUMFromServer::EntitySpawn(spawn) => match spawn.data {
+            RUMFromServer::EntitySpawn(spawn) => match &spawn.data {
                 NetworkEntityType::Player { id, transform } => {
-                    if id == c_info.id {
+                    if *id == c_info.id {
                         warn!("got spawn request for current client");
                         continue;
                     }
-                    spawn_player(&mut cmds, spawn.server_id, id, transform, c_info.id == id)
+                    spawn_player(
+                        &mut cmds,
+                        spawn.server_id,
+                        *id,
+                        *transform,
+                        c_info.id == *id,
+                    )
                 }
                 NetworkEntityType::NPC { transform } => {
-                    let mut e =
-                        cmds.spawn((square(Color::BLUE), ServerObject::from_u64(spawn.server_id)));
-                    e.insert(TransformBundle::from_transform(transform));
+                    let mut e = cmds.spawn((
+                        square(Color::BLUE, 10.0),
+                        ServerObject::from_u64(spawn.server_id),
+                    ));
+                    e.insert(TransformBundle::from_transform(*transform));
+                }
+                NetworkEntityType::Bullet { bullet, transform } => {
+                    spawn_bullet(&mut cmds, *transform, bullet.velocity, spawn.server_id);
                 }
             },
             _ => {}
@@ -194,7 +207,7 @@ pub fn spawn_npc_on_server(mut cmds: Commands) {
             target: None,
             timer: Timer::new(Duration::from_secs(5), TimerMode::Once),
         },
-        square(Color::BLUE),
+        square(Color::BLUE, 10.0),
         ServerObject::from_u64(rand::random()),
     ));
 }
@@ -242,6 +255,42 @@ pub fn move_npc_on_server(mut npcs: Query<(&mut Transform, &mut NPC)>, time: Res
                 }
             }
             None => {}
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Component, Clone)]
+pub struct Bullet {
+    velocity: Vec2,
+}
+
+pub fn spawn_startup_bullet(mut cmds: Commands) {
+    spawn_bullet(
+        &mut cmds,
+        Transform::default(),
+        Vec2::Y * 20.0,
+        rand::random(),
+    );
+}
+
+fn spawn_bullet(cmds: &mut Commands, transform: Transform, velocity: Vec2, server_id: u64) {
+    let bullet = Bullet { velocity };
+    let mut b = cmds.spawn((
+        bullet,
+        square(Color::ORANGE, 5.0),
+        Deterministic::<Transform>::default(),
+        ServerObject::from_u64(server_id),
+    ));
+    b.insert(TransformBundle::from_transform(transform));
+}
+
+pub fn move_bullet(mut cmds: Commands, mut q: Query<(Entity, &mut Transform, &Bullet)>) {
+    for bullet in q.iter_mut() {
+        let (entity, mut transform, bullet) = bullet;
+        transform.translation += bullet.velocity.extend(0.0) * TICK_TIME as f32;
+
+        if transform.translation.x.abs() > 1000.0 || transform.translation.y.abs() > 1000.0 {
+            cmds.entity(entity).despawn_recursive();
         }
     }
 }

@@ -1,8 +1,13 @@
+use std::marker::PhantomData;
+
 use bevy::prelude::*;
 use bevy_renet::renet::{DefaultChannel, RenetServer};
 use serde::{Deserialize, Serialize};
 
-use crate::{game, impl_bytes};
+use crate::{
+    game::{self, Bullet},
+    impl_bytes,
+};
 
 use self::{input::InputBuffer, read::ClientMessages, tick::Tick};
 
@@ -39,6 +44,11 @@ pub fn interpolate<T: Component + Interpolate>(mut q: Query<(&mut T, &Interpolat
 #[derive(Component)]
 pub struct Prespawned {
     id: u64,
+}
+
+#[derive(Component, Default)]
+pub struct Deterministic<T: Component> {
+    data: PhantomData<T>,
 }
 
 /// A common identifier between the client and server that identifies an entity.
@@ -158,7 +168,10 @@ pub struct RUMFromClientWithId {
 
 pub fn apply_transform_on_client(
     msgs: Res<ClientMessages>,
-    mut t_q: Query<(Entity, &mut Transform, &ServerObject, Option<&LocalPlayer>)>,
+    mut t_q: Query<
+        (Entity, &mut Transform, &ServerObject, Option<&LocalPlayer>),
+        Without<Deterministic<Transform>>,
+    >,
     tick: Res<tick::Tick>,
     mut commands: Commands,
     i_buf: Res<InputBuffer>,
@@ -218,8 +231,17 @@ pub struct NetworkEntity {
 
 #[derive(Serialize, Deserialize, Clone)]
 pub enum NetworkEntityType {
-    Player { id: PlayerId, transform: Transform },
-    NPC { transform: Transform },
+    Player {
+        id: PlayerId,
+        transform: Transform,
+    },
+    NPC {
+        transform: Transform,
+    },
+    Bullet {
+        bullet: Bullet,
+        transform: Transform,
+    },
 }
 
 pub mod read {
@@ -527,7 +549,7 @@ pub mod conn {
     use bevy_renet::renet::{ClientId, DefaultChannel, RenetServer, ServerEvent};
 
     use crate::{
-        game::{self, Player, NPC},
+        game::{self, Bullet, Player, NPC},
         netcode::RUMFromServer,
     };
 
@@ -579,6 +601,7 @@ pub mod conn {
         mut server: ResMut<RenetServer>,
         players: Query<(&ServerObject, &Player, &Transform)>,
         npcs: Query<(&ServerObject, &Transform), With<NPC>>,
+        bullets: Query<(&ServerObject, &Transform, &Bullet)>,
     ) {
         for msg in msgs.reliable.iter() {
             if let RUMFromClient::StartedGame = msg.msg {
@@ -615,6 +638,20 @@ pub mod conn {
                         RUMFromServer::EntitySpawn(NetworkEntity {
                             server_id: obj.as_u64(),
                             data: NetworkEntityType::NPC {
+                                transform: *transform,
+                            },
+                        }),
+                    );
+                }
+
+                for (obj, transform, bullet) in bullets.iter() {
+                    server.send_message(
+                        ClientId::from_raw(msg.id),
+                        DefaultChannel::ReliableUnordered,
+                        RUMFromServer::EntitySpawn(NetworkEntity {
+                            server_id: obj.as_u64(),
+                            data: NetworkEntityType::Bullet {
+                                bullet: bullet.clone(),
                                 transform: *transform,
                             },
                         }),
