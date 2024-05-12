@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use bevy::{ecs::schedule::ScheduleLabel, prelude::*};
 
 use crate::{
@@ -5,7 +7,7 @@ use crate::{
         input::{Input, InputBuffer, InputMapBuffer},
         read::ClientMessages,
         tick::Tick,
-        ClientInfo, LocalPlayer, PlayerId, RUMFromServer, ServerObject,
+        ClientInfo, LocalPlayer, NetworkEntityType, PlayerId, RUMFromServer, ServerObject,
     },
     TICK_TIME,
 };
@@ -98,6 +100,17 @@ pub fn move_on_server(
     }
 }
 
+fn square(color: Color) -> SpriteBundle {
+    SpriteBundle {
+        sprite: Sprite {
+            color,
+            custom_size: Some(Vec2::new(10.0, 10.0)),
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
 pub fn spawn_player(
     cmds: &mut Commands,
     server_obj: u64,
@@ -111,7 +124,7 @@ pub fn spawn_player(
         SpriteBundle {
             sprite: Sprite {
                 color: if is_local {
-                    Color::rgb(0.0, 0.0, 1.0)
+                    Color::rgb(0.0, 1.0, 0.0)
                 } else {
                     Color::rgb(1.0, 0.0, 0.0)
                 },
@@ -128,7 +141,7 @@ pub fn spawn_player(
     }
 }
 
-pub fn spawn_joined_players_on_client(
+pub fn spawn_network_entities_on_client(
     mut cmds: Commands,
     msgs: Res<ClientMessages>,
     c_info: Res<ClientInfo>,
@@ -140,16 +153,19 @@ pub fn spawn_joined_players_on_client(
                 id,
                 transform,
             } => spawn_player(&mut cmds, *server_obj, *id, *transform, c_info.id == *id),
-            RUMFromServer::PlayerSpawn {
-                server_obj,
-                id,
-                transform,
-            } => {
-                if *id == c_info.id {
-                    warn!("got spawn request for current client");
-                    continue;
+            RUMFromServer::EntitySpawn(spawn) => match spawn.data {
+                NetworkEntityType::Player { id, transform } => {
+                    if id == c_info.id {
+                        warn!("got spawn request for current client");
+                        continue;
+                    }
+                    spawn_player(&mut cmds, spawn.server_id, id, transform, c_info.id == id)
                 }
-                spawn_player(&mut cmds, *server_obj, *id, *transform, c_info.id == *id)
+                NetworkEntityType::NPC { transform } => {
+                    let mut e =
+                        cmds.spawn((square(Color::BLUE), ServerObject::from_u64(spawn.server_id)));
+                    e.insert(TransformBundle::from_transform(transform));
+                }
             },
             _ => {}
         }
@@ -168,6 +184,64 @@ pub fn despawn_disconnected_players_on_client(
                     cmds.entity(entity).despawn_recursive();
                 }
             }
+        }
+    }
+}
+
+pub fn spawn_npc_on_server(mut cmds: Commands) {
+    cmds.spawn((
+        NPC {
+            target: None,
+            timer: Timer::new(Duration::from_secs(5), TimerMode::Once),
+        },
+        square(Color::BLUE),
+        ServerObject::from_u64(rand::random()),
+    ));
+}
+
+#[derive(Component)]
+pub struct NPC {
+    target: Option<(f32, f32)>,
+    timer: Timer,
+}
+
+pub fn move_npc_on_server(mut npcs: Query<(&mut Transform, &mut NPC)>, time: Res<Time>) {
+    for (mut transform, mut npc) in npcs.iter_mut() {
+        npc.timer.tick(time.delta());
+        if npc.timer.just_finished() {
+            match npc.target {
+                Some(_) => {
+                    npc.target = None;
+                }
+                None => {
+                    npc.target = Some((
+                        rand::random::<f32>() * 200.0 - 100.0,
+                        rand::random::<f32>() * 200.0 - 100.0,
+                    ))
+                }
+            }
+            npc.timer = Timer::new(
+                Duration::from_secs_f32(rand::random::<f32>() * 5.0),
+                TimerMode::Once,
+            );
+        }
+
+        match npc.target {
+            Some((x, y)) => {
+                const SPEED: f32 = 30.0;
+
+                let diff = Vec2::new(x - transform.translation.x, y - transform.translation.y);
+                let mag = SPEED * TICK_TIME as f32;
+
+                // Avoid overshooting.
+                if diff.length() < mag {
+                    transform.translation = Vec2::new(x, y).extend(0.0);
+                } else {
+                    let dir = diff.normalize_or_zero();
+                    transform.translation += (dir * mag).extend(0.0);
+                }
+            }
+            None => {}
         }
     }
 }

@@ -12,7 +12,7 @@ use bevy_renet::{
     transport::{NetcodeClientPlugin, NetcodeServerPlugin},
     RenetClientPlugin, RenetServerPlugin,
 };
-use game::GameLogic;
+use game::{spawn_npc_on_server, GameLogic};
 use netcode::{
     input::{InputBuffer, InputMapBuffer},
     read::{ClientMessages, ServerMessages},
@@ -112,7 +112,7 @@ fn client(server_addr: SocketAddr, socket: UdpSocket, client_id: u64) {
             netcode::replace_prespawned_on_client,
             netcode::apply_transform_on_client,
             netcode::tick::set_adjustment_tick_on_client,
-            game::spawn_joined_players_on_client,
+            game::spawn_network_entities_on_client,
             game::despawn_disconnected_players_on_client,
             game::run_game_logic_on_client,
         )
@@ -159,7 +159,12 @@ fn server(server_addr: SocketAddr) {
     app.insert_resource(netcode::tick::Tick::default());
     app.insert_resource(Time::<Fixed>::from_seconds(TICK_TIME));
 
-    app.add_systems(GameLogic, (game::move_on_server,).chain());
+    app.add_systems(
+        GameLogic,
+        (game::move_on_server, game::move_npc_on_server).chain(),
+    );
+
+    app.add_systems(Startup, spawn_npc_on_server);
 
     app.add_systems(
         FixedUpdate,

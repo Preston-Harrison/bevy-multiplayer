@@ -133,10 +133,9 @@ pub enum RUMFromServer {
     PlayerLeft {
         server_obj: u64,
     },
-    PlayerSpawn {
-        server_obj: u64,
-        id: PlayerId,
-        transform: Transform,
+    EntitySpawn(NetworkEntity),
+    EntityDespawn {
+        server_id: u64,
     },
     AdjustTick(i8),
     BroadcastTick(u64),
@@ -209,6 +208,18 @@ impl Interpolate for Transform {
         // 0.1 for 10% movement towards the target each tick
         self.translation = self.translation.lerp(target.translation, 0.1);
     }
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct NetworkEntity {
+    pub data: NetworkEntityType,
+    pub server_id: u64,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub enum NetworkEntityType {
+    Player { id: PlayerId, transform: Transform },
+    NPC { transform: Transform },
 }
 
 pub mod read {
@@ -516,11 +527,14 @@ pub mod conn {
     use bevy_renet::renet::{ClientId, DefaultChannel, RenetServer, ServerEvent};
 
     use crate::{
-        game::{self, Player},
+        game::{self, Player, NPC},
         netcode::RUMFromServer,
     };
 
-    use super::{read::ServerMessages, tick::Tick, RUMFromClient, ServerObject};
+    use super::{
+        read::ServerMessages, tick::Tick, NetworkEntity, NetworkEntityType, RUMFromClient,
+        ServerObject,
+    };
 
     pub fn handle_connect_on_server(
         mut cmds: Commands,
@@ -564,6 +578,7 @@ pub mod conn {
         msgs: Res<ServerMessages>,
         mut server: ResMut<RenetServer>,
         players: Query<(&ServerObject, &Player, &Transform)>,
+        npcs: Query<(&ServerObject, &Transform), With<NPC>>,
     ) {
         for msg in msgs.reliable.iter() {
             if let RUMFromClient::StartedGame = msg.msg {
@@ -583,12 +598,27 @@ pub mod conn {
                     server.send_message(
                         ClientId::from_raw(msg.id),
                         DefaultChannel::ReliableUnordered,
-                        RUMFromServer::PlayerSpawn {
-                            server_obj: obj.as_u64(),
-                            id: player.id,
-                            transform: transform.clone(),
-                        },
-                    )
+                        RUMFromServer::EntitySpawn(NetworkEntity {
+                            server_id: obj.as_u64(),
+                            data: NetworkEntityType::Player {
+                                id: player.id,
+                                transform: *transform,
+                            },
+                        }),
+                    );
+                }
+
+                for (obj, transform) in npcs.iter() {
+                    server.send_message(
+                        ClientId::from_raw(msg.id),
+                        DefaultChannel::ReliableUnordered,
+                        RUMFromServer::EntitySpawn(NetworkEntity {
+                            server_id: obj.as_u64(),
+                            data: NetworkEntityType::NPC {
+                                transform: *transform,
+                            },
+                        }),
+                    );
                 }
             }
         }
