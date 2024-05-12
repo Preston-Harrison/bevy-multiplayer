@@ -8,7 +8,7 @@ use self::{input::InputBuffer, read::ClientMessages, tick::Tick};
 
 pub type PlayerId = u64;
 
-#[derive(Resource)]
+#[derive(Resource, Debug)]
 pub struct ClientInfo {
     pub id: PlayerId,
 }
@@ -132,6 +132,11 @@ pub enum RUMFromServer {
     },
     PlayerLeft {
         server_obj: u64,
+    },
+    PlayerSpawn {
+        server_obj: u64,
+        id: PlayerId,
+        transform: Transform,
     },
     AdjustTick(i8),
     BroadcastTick(u64),
@@ -399,11 +404,7 @@ pub mod input {
     use bevy_renet::renet::{DefaultChannel, RenetClient};
     use serde::{Deserialize, Serialize};
 
-    use crate::{
-        impl_bytes,
-        netcode::InputWithTick,
-        utils::{Buffer, Queue},
-    };
+    use crate::{impl_bytes, netcode::InputWithTick, utils::Buffer};
 
     use super::{read::ServerMessages, tick::Tick, PlayerId, UMFromClient};
 
@@ -512,7 +513,7 @@ pub mod conn {
         log::info,
         prelude::*,
     };
-    use bevy_renet::renet::{DefaultChannel, RenetServer, ServerEvent};
+    use bevy_renet::renet::{ClientId, DefaultChannel, RenetServer, ServerEvent};
 
     use crate::{
         game::{self, Player},
@@ -562,6 +563,7 @@ pub mod conn {
         mut cmds: Commands,
         msgs: Res<ServerMessages>,
         mut server: ResMut<RenetServer>,
+        players: Query<(&ServerObject, &Player, &Transform)>,
     ) {
         for msg in msgs.reliable.iter() {
             if let RUMFromClient::StartedGame = msg.msg {
@@ -573,6 +575,21 @@ pub mod conn {
                     transform: Transform::default(),
                 };
                 server.broadcast_message(DefaultChannel::ReliableUnordered, join_payload);
+
+                for (obj, player, transform) in players.iter() {
+                    if player.id == msg.id {
+                        continue;
+                    }
+                    server.send_message(
+                        ClientId::from_raw(msg.id),
+                        DefaultChannel::ReliableUnordered,
+                        RUMFromServer::PlayerSpawn {
+                            server_obj: obj.as_u64(),
+                            id: player.id,
+                            transform: transform.clone(),
+                        },
+                    )
+                }
             }
         }
     }

@@ -134,13 +134,24 @@ pub fn spawn_joined_players_on_client(
     c_info: Res<ClientInfo>,
 ) {
     for msg in msgs.reliable.iter() {
-        if let RUMFromServer::PlayerJoined {
-            server_obj,
-            id,
-            transform,
-        } = msg
-        {
-            spawn_player(&mut cmds, *server_obj, *id, *transform, c_info.id == *id)
+        match msg {
+            RUMFromServer::PlayerJoined {
+                server_obj,
+                id,
+                transform,
+            } => spawn_player(&mut cmds, *server_obj, *id, *transform, c_info.id == *id),
+            RUMFromServer::PlayerSpawn {
+                server_obj,
+                id,
+                transform,
+            } => {
+                if *id == c_info.id {
+                    warn!("got spawn request for current client");
+                    continue;
+                }
+                spawn_player(&mut cmds, *server_obj, *id, *transform, c_info.id == *id)
+            },
+            _ => {}
         }
     }
 }

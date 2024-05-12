@@ -46,7 +46,7 @@ fn client(server_addr: SocketAddr, socket: UdpSocket, client_id: u64) {
     let mut app = App::new();
     app.add_plugins(DefaultPlugins.set(WindowPlugin {
         primary_window: Some(Window {
-            title: "client".to_string(),
+            title: format!("client {}", client_id),
             ..Default::default()
         }),
         ..Default::default()
