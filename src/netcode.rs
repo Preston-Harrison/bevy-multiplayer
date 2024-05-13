@@ -39,11 +39,18 @@ pub fn interpolate<T: Component + Interpolate>(mut q: Query<(&mut T, &Interpolat
     }
 }
 
-/// If this exists on an entity, it will be deleted when a ServerObject is spawned
-/// with the same id.
+/// Must exist on an object with a ServerObject to do anything.
 #[derive(Component)]
 pub struct Prespawned {
-    id: u64,
+    pub behavior: PrespawnBehavior,
+}
+
+#[derive(Eq, PartialEq)]
+pub enum PrespawnBehavior {
+    // Will ignore spawn requests.
+    Ignore,
+    // Will delete this entity and replace it with the server entity.
+    Replace,
 }
 
 #[derive(Component, Default)]
@@ -65,24 +72,7 @@ impl ServerObject {
     }
 }
 
-/// Replaces prespawned entities with server objects. Useful for things like bullets,
-/// which are spawned immediately on the client, then handed to the server once an
-/// acknoledgement is received.
-pub fn replace_prespawned_on_client(
-    mut commands: Commands,
-    prespawned: Query<(Entity, &Prespawned)>,
-    server_objs: Query<&ServerObject, Added<ServerObject>>,
-) {
-    for server_obj in server_objs.iter() {
-        for (e, spawn) in prespawned.iter() {
-            if server_obj.as_u64() == spawn.id {
-                commands.entity(e).despawn_recursive();
-            }
-        }
-    }
-}
-
-pub fn broadcast_transforms(
+pub fn broadcast_transforms_on_server(
     mut server: ResMut<RenetServer>,
     objs: Query<(&ServerObject, &Transform)>,
     tick: Res<Tick>,
@@ -192,16 +182,10 @@ pub fn apply_transform_on_client(
             for (entity, mut transform, server_obj, local) in t_q.iter_mut() {
                 if server_obj.as_u64() == update.server_obj {
                     if local.is_some() {
-                        info!(
-                            "resetting transform on tick {} to tick {}",
-                            tick.current - 1,
-                            update.tick
-                        );
                         *transform = update.component.clone();
                         let ticks = tick.current.saturating_sub(update.tick);
                         for n in (1..ticks).rev() {
                             if let Some(input) = i_buf.inputs.get(n as usize) {
-                                info!("simming tick {} ({} ticks ago)", tick.current - n, n);
                                 game::move_player(&mut transform, input);
                             }
                         }
@@ -213,6 +197,24 @@ pub fn apply_transform_on_client(
                 }
             }
         }
+    }
+}
+
+pub fn broadcast_bullets_on_server(
+    mut server: ResMut<RenetServer>,
+    bullets: Query<(&Transform, &Bullet, &ServerObject), Added<Bullet>>,
+) {
+    for (transform, bullet, server_obj) in bullets.iter() {
+        server.broadcast_message(
+            DefaultChannel::ReliableUnordered,
+            RUMFromServer::EntitySpawn(NetworkEntity {
+                server_id: server_obj.as_u64(),
+                data: NetworkEntityType::Bullet {
+                    bullet: bullet.clone(),
+                    transform: *transform,
+                },
+            }),
+        );
     }
 }
 
@@ -350,7 +352,6 @@ pub mod tick {
 
     pub fn increment_tick_on_server(mut tick: ResMut<Tick>) {
         tick.current += 1;
-        info!("incremented tick to {}", tick.current);
     }
 
     pub fn set_adjustment_tick_on_client(mut tick: ResMut<Tick>, msgs: Res<ClientMessages>) {
@@ -433,13 +434,13 @@ pub mod tick {
 }
 
 pub mod input {
-    use bevy::{prelude::*, utils::hashbrown::HashMap};
+    use bevy::{prelude::*, utils::hashbrown::HashMap, window::PrimaryWindow};
     use bevy_renet::renet::{DefaultChannel, RenetClient};
     use serde::{Deserialize, Serialize};
 
-    use crate::{impl_bytes, netcode::InputWithTick, utils::Buffer};
+    use crate::{game::MousePosition, impl_bytes, netcode::InputWithTick, utils::Buffer};
 
-    use super::{read::ServerMessages, tick::Tick, PlayerId, UMFromClient};
+    use super::{read::ServerMessages, tick::Tick, LocalPlayer, PlayerId, UMFromClient};
 
     #[derive(Resource)]
     pub struct InputBuffer {
@@ -467,12 +468,26 @@ pub mod input {
         }
     }
 
-    #[derive(Serialize, Deserialize, Clone, Debug, Default, Eq, PartialEq)]
+    #[derive(Serialize, Deserialize, Clone, Debug, Default)]
+    pub struct ShootInput {
+        pub direction: Vec2,
+        pub origin: Vec2,
+        pub server_id: u64,
+    }
+
+    #[derive(Serialize, Deserialize, Clone, Debug, Default)]
     pub struct Input {
         pub x: i8,
         pub y: i8,
+        pub shoot: Option<ShootInput>,
     }
     impl_bytes!(Input);
+
+    impl Input {
+        pub fn is_no_input(&self) -> bool {
+            self.x == 0 && self.y == 0 && self.shoot.is_none()
+        }
+    }
 
     #[derive(Serialize, Deserialize, Clone)]
     pub struct InputWithId {
@@ -506,12 +521,21 @@ pub mod input {
 
     pub fn read_input_on_client(
         key: Res<ButtonInput<KeyCode>>,
+        mouse: Res<ButtonInput<MouseButton>>,
+        mouse_pos: Res<MousePosition>,
+        player_q: Query<&Transform, With<LocalPlayer>>,
         mut i_buf: ResMut<InputBuffer>,
         mut client: ResMut<RenetClient>,
         tick: Res<Tick>,
     ) {
-        info!("reading input on tick {}", tick.current);
-        let mut input = Input { x: 0, y: 0 };
+        let Ok(player_t) = player_q.get_single() else {
+            return;
+        };
+        let mut input = Input {
+            x: 0,
+            y: 0,
+            shoot: None,
+        };
 
         if key.pressed(KeyCode::KeyW) {
             input.y += 1;
@@ -526,9 +550,21 @@ pub mod input {
             input.x += 1;
         }
 
+        if let Some(position) = mouse_pos.current {
+            if mouse.pressed(MouseButton::Left) {
+                let dir = (position - player_t.translation.truncate()).normalize_or_zero();
+                let origin = player_t.translation.truncate();
+                input.shoot = Some(ShootInput {
+                    direction: dir,
+                    origin,
+                    server_id: rand::random(),
+                });
+            }
+        }
+
         i_buf.inputs.push_front(input.clone());
 
-        if input != Input::default() {
+        if !input.is_no_input() {
             client.send_message(
                 DefaultChannel::Unreliable,
                 UMFromClient::Input(InputWithTick {

@@ -12,7 +12,7 @@ use bevy_renet::{
     transport::{NetcodeClientPlugin, NetcodeServerPlugin},
     RenetClientPlugin, RenetServerPlugin,
 };
-use game::{spawn_npc_on_server, GameLogic};
+use game::{spawn_npc_on_server, GameLogic, MainCamera, MousePosition};
 use netcode::{
     input::{InputBuffer, InputMapBuffer},
     read::{ClientMessages, ServerMessages},
@@ -73,11 +73,12 @@ fn client(server_addr: SocketAddr, socket: UdpSocket, client_id: u64) {
     app.insert_resource(InputBuffer::default());
     app.insert_resource(Time::<Fixed>::from_seconds(TICK_TIME));
     app.insert_resource(TickBroadcastTimer::default());
+    app.insert_resource(MousePosition::default());
 
     app.insert_state(ClientState::Connecting);
 
     app.add_systems(Startup, |mut commands: Commands| {
-        commands.spawn(Camera2dBundle::default());
+        commands.spawn((Camera2dBundle::default(), MainCamera));
     });
     app.add_systems(
         FixedUpdate,
@@ -95,7 +96,7 @@ fn client(server_addr: SocketAddr, socket: UdpSocket, client_id: u64) {
 
     app.add_systems(
         Update,
-        netcode::interpolate::<Transform>.run_if(in_state(ClientState::InGame)),
+        (netcode::interpolate::<Transform>, game::set_cursor_location_on_client).run_if(in_state(ClientState::InGame)),
     );
     app.add_systems(
         OnEnter(ClientState::InGame),
@@ -109,7 +110,6 @@ fn client(server_addr: SocketAddr, socket: UdpSocket, client_id: u64) {
         (
             netcode::input::read_input_on_client,
             netcode::tick::broadcast_tick_on_client,
-            netcode::replace_prespawned_on_client,
             netcode::apply_transform_on_client,
             netcode::tick::set_adjustment_tick_on_client,
             game::spawn_network_entities_on_client,
@@ -179,7 +179,8 @@ fn server(server_addr: SocketAddr) {
             netcode::input::read_input_on_server,
             // Run simulation, send updates for current tick, then update tick.
             game::run_game_logic_on_server,
-            netcode::broadcast_transforms,
+            netcode::broadcast_transforms_on_server,
+            netcode::broadcast_bullets_on_server,
             netcode::tick::increment_tick_on_server,
             netcode::conn::handle_connect_on_server,
             netcode::conn::send_join_messages_on_server,

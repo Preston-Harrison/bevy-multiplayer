@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use bevy::{ecs::schedule::ScheduleLabel, prelude::*};
+use bevy::{ecs::schedule::ScheduleLabel, prelude::*, window::PrimaryWindow};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -8,21 +8,47 @@ use crate::{
         input::{Input, InputBuffer, InputMapBuffer},
         read::ClientMessages,
         tick::Tick,
-        ClientInfo, Deterministic, LocalPlayer, NetworkEntityType, PlayerId, RUMFromServer,
-        ServerObject,
+        ClientInfo, Deterministic, LocalPlayer, NetworkEntityType, PlayerId, PrespawnBehavior,
+        Prespawned, RUMFromServer, ServerObject,
     },
     TICK_TIME,
 };
 
+const BULLET_SPEED: f32 = 30.0;
+
 #[derive(ScheduleLabel, Debug, Hash, PartialEq, Eq, Clone)]
 pub struct GameLogic;
+
+#[derive(Component)]
+pub struct MainCamera;
+
+#[derive(Resource, Default)]
+pub struct MousePosition {
+    pub current: Option<Vec2>,
+    pub last: Vec2,
+}
+
+pub fn set_cursor_location_on_client(
+    mut mpos: ResMut<MousePosition>,
+    q_window: Query<&Window, With<PrimaryWindow>>,
+    q_camera: Query<(&Camera, &GlobalTransform), With<MainCamera>>,
+) {
+    let (camera, camera_transform) = q_camera.single();
+    let window = q_window.single();
+    mpos.current = window
+        .cursor_position()
+        .and_then(|cursor| camera.viewport_to_world(camera_transform, cursor))
+        .map(|ray| ray.origin.truncate());
+
+    if let Some(v) = mpos.current {
+        mpos.last = v;
+    }
+}
 
 pub fn run_game_logic_on_client(world: &mut World) {
     let tick = world.get_resource::<Tick>().expect("tick must exist");
     let mut adjust = tick.adjust;
     let mut current = tick.current;
-
-    info!("adjustment is {adjust}");
 
     if adjust >= 1 {
         info!("fast forwarding");
@@ -50,7 +76,6 @@ pub fn run_game_logic_on_client(world: &mut World) {
 
     let mut tick = world.get_resource_mut::<Tick>().expect("tick must exist");
     tick.adjust = adjust;
-    info!("current tick is {current}");
     tick.current = current;
 }
 
@@ -71,21 +96,33 @@ pub fn move_player(transform: &mut Transform, input: &Input) {
 }
 
 pub fn move_on_client(
+    mut cmds: Commands,
     i_buf: Res<InputBuffer>,
     mut player: Query<&mut Transform, With<LocalPlayer>>,
-    tick: Res<Tick>,
 ) {
     if let Some(input) = i_buf.inputs.get(0) {
         if player.get_single_mut().is_err() {
             return;
         }
         let mut transform = player.get_single_mut().unwrap();
-        info!("moving from input tick {}", tick.current);
         move_player(&mut transform, input);
+
+        if let Some(ref shot) = input.shoot {
+            let entity = spawn_bullet(
+                &mut cmds,
+                Transform::from_translation(shot.origin.extend(0.0)),
+                shot.direction * BULLET_SPEED,
+                shot.server_id,
+            );
+            cmds.entity(entity).insert(Prespawned {
+                behavior: PrespawnBehavior::Ignore,
+            });
+        }
     }
 }
 
 pub fn move_on_server(
+    mut cmds: Commands,
     mut i_buf: ResMut<InputMapBuffer>,
     mut players: Query<(&mut Transform, &Player)>,
 ) {
@@ -97,6 +134,15 @@ pub fn move_on_server(
         for (mut transform, player) in players.iter_mut() {
             if *id == player.id {
                 move_player(&mut transform, input);
+
+                if let Some(ref shot) = input.shoot {
+                    spawn_bullet(
+                        &mut cmds,
+                        Transform::from_translation(shot.origin.extend(0.0)),
+                        shot.direction * BULLET_SPEED,
+                        shot.server_id,
+                    );
+                }
             }
         }
     }
@@ -147,6 +193,7 @@ pub fn spawn_network_entities_on_client(
     mut cmds: Commands,
     msgs: Res<ClientMessages>,
     c_info: Res<ClientInfo>,
+    prespawns: Query<(Entity, &Prespawned, &ServerObject)>,
 ) {
     for msg in msgs.reliable.iter() {
         match msg {
@@ -177,7 +224,23 @@ pub fn spawn_network_entities_on_client(
                     e.insert(TransformBundle::from_transform(*transform));
                 }
                 NetworkEntityType::Bullet { bullet, transform } => {
-                    spawn_bullet(&mut cmds, *transform, bullet.velocity, spawn.server_id);
+                    // TODO: refactor
+                    let mut should_spawn = true;
+                    for (entity, prespawn, server_obj) in prespawns.iter() {
+                        if server_obj.as_u64() == spawn.server_id {
+                            match prespawn.behavior {
+                                PrespawnBehavior::Ignore => {
+                                    should_spawn = false;
+                                }
+                                PrespawnBehavior::Replace => {
+                                    cmds.entity(entity).despawn_recursive();
+                                }
+                            }
+                        }
+                    }
+                    if should_spawn {
+                        spawn_bullet(&mut cmds, *transform, bullet.velocity, spawn.server_id);
+                    }
                 }
             },
             _ => {}
@@ -268,12 +331,17 @@ pub fn spawn_startup_bullet(mut cmds: Commands) {
     spawn_bullet(
         &mut cmds,
         Transform::default(),
-        Vec2::Y * 20.0,
+        Vec2::Y * BULLET_SPEED,
         rand::random(),
     );
 }
 
-fn spawn_bullet(cmds: &mut Commands, transform: Transform, velocity: Vec2, server_id: u64) {
+fn spawn_bullet(
+    cmds: &mut Commands,
+    transform: Transform,
+    velocity: Vec2,
+    server_id: u64,
+) -> Entity {
     let bullet = Bullet { velocity };
     let mut b = cmds.spawn((
         bullet,
@@ -282,6 +350,7 @@ fn spawn_bullet(cmds: &mut Commands, transform: Transform, velocity: Vec2, serve
         ServerObject::from_u64(server_id),
     ));
     b.insert(TransformBundle::from_transform(transform));
+    b.id()
 }
 
 pub fn move_bullet(mut cmds: Commands, mut q: Query<(Entity, &mut Transform, &Bullet)>) {
