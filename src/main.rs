@@ -12,10 +12,11 @@ use bevy_renet::{
     transport::{NetcodeClientPlugin, NetcodeServerPlugin},
     RenetClientPlugin, RenetServerPlugin,
 };
+use clap::Parser;
 use game::{spawn_npc_on_server, GameLogic, MainCamera, MousePosition};
 use netcode::{
     input::{InputBuffer, InputMapBuffer},
-    read::{ClientMessages, ServerMessages},
+    read::{ClientMessages, DelayedMessagesServer, ServerMessages},
     tick::{Tick, TickBroadcastTimer},
 };
 use std::{
@@ -96,7 +97,11 @@ fn client(server_addr: SocketAddr, socket: UdpSocket, client_id: u64) {
 
     app.add_systems(
         Update,
-        (netcode::interpolate::<Transform>, game::set_cursor_location_on_client).run_if(in_state(ClientState::InGame)),
+        (
+            netcode::interpolate::<Transform>,
+            game::set_cursor_location_on_client,
+        )
+            .run_if(in_state(ClientState::InGame)),
     );
     app.add_systems(
         OnEnter(ClientState::InGame),
@@ -123,7 +128,7 @@ fn client(server_addr: SocketAddr, socket: UdpSocket, client_id: u64) {
     app.run();
 }
 
-fn server(server_addr: SocketAddr) {
+fn server(server_addr: SocketAddr, latency: u64) {
     let mut app = App::new();
     app.add_plugins(DefaultPlugins.set(WindowPlugin {
         primary_window: Some(Window {
@@ -158,6 +163,7 @@ fn server(server_addr: SocketAddr) {
     app.insert_resource(InputMapBuffer::default());
     app.insert_resource(netcode::tick::Tick::default());
     app.insert_resource(Time::<Fixed>::from_seconds(TICK_TIME));
+    app.insert_resource(DelayedMessagesServer::new(latency));
 
     app.add_systems(
         GameLogic,
@@ -191,21 +197,31 @@ fn server(server_addr: SocketAddr) {
     app.run()
 }
 
+#[derive(Parser, Debug)]
+struct Args {
+    #[arg(long, short)]
+    client: bool,
+
+    #[arg(long, short)]
+    id: Option<u64>,
+
+    #[arg(long, short)]
+    server: bool,
+
+    #[arg(long, short)]
+    latency: Option<u64>,
+}
+
 fn main() {
+    let args = Args::parse();
     let socket = UdpSocket::bind("127.0.0.1:0").unwrap();
     let server_addr = "127.0.0.1:5000".parse().unwrap();
 
-    match args().skip(1).next() {
-        Some(v) if v == "client" => {
-            let id: u64 = args()
-                .skip(2)
-                .next()
-                .expect("must parse id")
-                .parse()
-                .expect("id must be number");
-            client(server_addr, socket, id)
-        }
-        Some(v) if v == "server" => server(server_addr),
-        _ => panic!("must provider 'client' or 'server' as first arg"),
-    };
+    assert!(args.client ^ args.server, "must specify client or server");
+
+    if args.client {
+        client(server_addr, socket, args.id.expect("must pass id"));
+    } else {
+        server(server_addr, args.latency.unwrap_or(0));
+    }
 }

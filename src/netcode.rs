@@ -247,13 +247,92 @@ pub enum NetworkEntityType {
 }
 
 pub mod read {
+    use std::{
+        collections::VecDeque,
+        marker::PhantomData,
+        time::{Duration, SystemTime},
+    };
+
     use bevy::prelude::*;
-    use bevy_renet::renet::{DefaultChannel, RenetClient, RenetServer};
+    use bevy_renet::renet::{Bytes, ClientId, DefaultChannel, RenetClient, RenetServer};
+
+    use crate::current_time;
 
     use super::{
         RUMFromClient, RUMFromClientWithId, RUMFromServer, UMFromClient, UMFromClientWithId,
         UMFromServer,
     };
+
+    trait MessageStore {
+        type Reliable;
+        type Unreliable;
+        fn unreliable(&mut self) -> &mut Vec<Self::Unreliable>;
+        fn reliable(&mut self) -> &mut Vec<Self::Reliable>;
+    }
+
+    /// Allows for mock latency.
+    #[derive(Resource)]
+    pub struct DelayedMessagesServer {
+        reliable: VecDeque<(ClientId, Bytes, Duration)>,
+        unreliable: VecDeque<(ClientId, Bytes, Duration)>,
+        latency_ms: u64,
+    }
+
+    impl DelayedMessagesServer {
+        pub fn new(latency: u64) -> Self {
+            Self {
+                reliable: Default::default(),
+                unreliable: Default::default(),
+                latency_ms: latency,
+            }
+        }
+
+        fn save_msgs(&mut self, server: &mut RenetServer) {
+            let time = current_time();
+            let clients = server.clients_id_iter().collect::<Vec<_>>();
+            for client in clients {
+                while let Some(msg) =
+                    server.receive_message(client, DefaultChannel::ReliableUnordered)
+                {
+                    self.reliable.push_back((client, msg, time));
+                }
+                while let Some(msg) = server.receive_message(client, DefaultChannel::Unreliable) {
+                    self.unreliable.push_back((client, msg, time));
+                }
+            }
+        }
+
+        fn read_msgs(&mut self, msgs: &mut ServerMessages) {
+            let time = current_time();
+            let read_threshold = time - Duration::from_millis(self.latency_ms);
+
+            while self.reliable.get(0).is_some_and(|v| v.2 < read_threshold) {
+                let (client, msg, _) = self.reliable.pop_front().unwrap();
+                if let Ok(um) = RUMFromClient::try_from(msg) {
+                    let msg = RUMFromClientWithId {
+                        id: client.raw(),
+                        msg: um,
+                    };
+                    msgs.reliable.push(msg);
+                } else {
+                    warn!("Received unparsable reliable message from client");
+                }
+            }
+
+            while self.unreliable.get(0).is_some_and(|v| v.2 < read_threshold) {
+                let (client, msg, _) = self.unreliable.pop_front().unwrap();
+                if let Ok(um) = UMFromClient::try_from(msg) {
+                    let msg = UMFromClientWithId {
+                        id: client.raw(),
+                        msg: um,
+                    };
+                    msgs.unreliable.push(msg);
+                } else {
+                    warn!("Received unparsable unreliable message from client");
+                }
+            }
+        }
+    }
 
     #[derive(Default, Resource, Clone)]
     pub struct ServerMessages {
@@ -261,40 +340,16 @@ pub mod read {
         pub reliable: Vec<RUMFromClientWithId>,
     }
 
-    pub fn recv_on_server(mut server: ResMut<RenetServer>, mut messages: ResMut<ServerMessages>) {
+    pub fn recv_on_server(
+        mut delay_msgs: ResMut<DelayedMessagesServer>,
+        mut server: ResMut<RenetServer>,
+        mut messages: ResMut<ServerMessages>,
+    ) {
         messages.unreliable.clear();
         messages.reliable.clear();
 
-        let clients = server.clients_id_iter().collect::<Vec<_>>();
-        for client in clients {
-            while let Some(message) = server.receive_message(client, DefaultChannel::Unreliable) {
-                if let Ok(um) = UMFromClient::try_from(message) {
-                    // TODO: get player id from client id instead of just using client id.
-                    let msg = UMFromClientWithId {
-                        id: client.raw(),
-                        msg: um,
-                    };
-                    messages.unreliable.push(msg);
-                } else {
-                    warn!("Received unparsable unreliable message from server");
-                };
-            }
-
-            while let Some(message) =
-                server.receive_message(client, DefaultChannel::ReliableUnordered)
-            {
-                if let Ok(um) = RUMFromClient::try_from(message) {
-                    // TODO: get player id from client id instead of just using client id.
-                    let msg = RUMFromClientWithId {
-                        id: client.raw(),
-                        msg: um,
-                    };
-                    messages.reliable.push(msg);
-                } else {
-                    warn!("Received unparsable reliable unordered message from server");
-                };
-            }
-        }
+        delay_msgs.save_msgs(&mut server);
+        delay_msgs.read_msgs(&mut messages);
     }
 
     #[derive(Default, Resource, Clone)]
@@ -434,7 +489,7 @@ pub mod tick {
 }
 
 pub mod input {
-    use bevy::{prelude::*, utils::hashbrown::HashMap, window::PrimaryWindow};
+    use bevy::{prelude::*, utils::hashbrown::HashMap};
     use bevy_renet::renet::{DefaultChannel, RenetClient};
     use serde::{Deserialize, Serialize};
 
