@@ -1,5 +1,3 @@
-#![allow(irrefutable_let_patterns)]
-
 use bevy::prelude::*;
 use bevy_renet::{
     renet::{
@@ -20,7 +18,6 @@ use netcode::{
     tick::{Tick, TickBroadcastTimer},
 };
 use std::{
-    env::args,
     net::{SocketAddr, UdpSocket},
     time::{Duration, SystemTime},
 };
@@ -108,7 +105,10 @@ fn client(server_addr: SocketAddr, socket: UdpSocket, client_id: u64) {
         netcode::tick::ask_for_game_updates_on_client,
     );
 
-    app.add_systems(GameLogic, (game::move_on_client, game::move_bullet).chain());
+    app.add_systems(
+        GameLogic,
+        (game::handle_local_input, game::move_bullet).chain(),
+    );
 
     app.add_systems(
         FixedUpdate,
@@ -165,31 +165,38 @@ fn server(server_addr: SocketAddr, latency: u64) {
     app.insert_resource(Time::<Fixed>::from_seconds(TICK_TIME));
     app.insert_resource(DelayedMessagesServer::new(latency));
 
+    netcode::chunk::add_resources(&mut app);
+
     app.add_systems(
         GameLogic,
         (
-            game::move_on_server,
+            game::handle_clients_input,
             game::move_npc_on_server,
             game::move_bullet,
         )
             .chain(),
     );
 
-    app.add_systems(Startup, (spawn_npc_on_server, game::spawn_startup_bullet));
+    app.add_systems(Startup, spawn_npc_on_server);
 
     app.add_systems(
         FixedUpdate,
         (
             netcode::read::recv_on_server,
-            netcode::tick::broadcast_adjustment_on_server,
+            netcode::tick::send_adjustments,
             netcode::input::read_input_on_server,
             // Run simulation, send updates for current tick, then update tick.
             game::run_game_logic_on_server,
-            netcode::broadcast_transforms_on_server,
-            netcode::broadcast_bullets_on_server,
+            netcode::set_associations,
+            netcode::chunk::check_new_players,
+            netcode::chunk::update_chunk_members,
+            netcode::chunk::draw_loaded_chunks,
+            netcode::send_transform_update,
+            // netcode::send_bullet_update,
             netcode::tick::increment_tick_on_server,
-            netcode::conn::handle_connect_on_server,
-            netcode::conn::send_join_messages_on_server,
+            netcode::conn::handle_client_connect_and_disconnect,
+            // netcode::conn::send_join_messages_on_server,
+            netcode::chunk::broadcast_entity_spawns,
         )
             .chain(),
     );

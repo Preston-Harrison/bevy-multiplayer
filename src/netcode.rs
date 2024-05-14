@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 
-use bevy::prelude::*;
+use bevy::{prelude::*, utils::HashMap};
 use bevy_renet::renet::{DefaultChannel, RenetServer};
 use serde::{Deserialize, Serialize};
 
@@ -21,6 +21,86 @@ pub struct ClientInfo {
 /// Tags a player with being local, meaning it will rollback instead of interpolate.
 #[derive(Component)]
 pub struct LocalPlayer;
+
+#[derive(Resource, Default)]
+pub struct Associations {
+    player_id_to_client_id: HashMap<u64, u64>,
+    client_id_to_player_id: HashMap<u64, u64>,
+
+    player_id_to_server_id: HashMap<u64, u64>,
+    server_id_to_player_id: HashMap<u64, u64>,
+
+    server_id_to_entity: HashMap<u64, Entity>,
+    entity_to_server_id: HashMap<Entity, u64>,
+}
+
+/// TODO: assertions
+impl Associations {
+    pub fn create_player(
+        &mut self,
+        player_id: u64,
+        server_id: u64,
+        client_id: u64,
+        entity: Entity,
+    ) {
+        self.player_id_to_client_id.insert(player_id, client_id);
+        self.client_id_to_player_id.insert(client_id, player_id);
+
+        self.player_id_to_server_id.insert(player_id, server_id);
+        self.server_id_to_player_id.insert(server_id, player_id);
+
+        self.server_id_to_entity.insert(server_id, entity);
+        self.entity_to_server_id.insert(entity, server_id);
+    }
+
+    pub fn remove_player(&mut self, player_id: u64) {
+        let server_id = self.player_id_to_server_id.remove(&player_id).unwrap();
+        let client_id = self.player_id_to_client_id.remove(&player_id).unwrap();
+        let entity = self.server_id_to_entity.remove(&server_id).unwrap();
+
+        self.client_id_to_player_id.remove(&client_id);
+        self.server_id_to_player_id.remove(&server_id);
+        self.entity_to_server_id.remove(&entity);
+    }
+
+    /// Returns (entity, server_id, player_id) for a client id.
+    pub fn get_data_for_client_id(&self, client_id: u64) -> Option<(Entity, u64, u64)> {
+        let player_id = self.client_id_to_player_id.get(&client_id)?;
+        let server_id = self.player_id_to_server_id.get(player_id)?;
+        let entity = self.server_id_to_entity.get(server_id)?;
+        Some((*entity, *server_id, *player_id))
+    }
+
+    pub fn is_server_and_client_eq(&self, server_id: u64, client_id: u64) -> bool {
+        let Some(player_id) = self.client_id_to_player_id.get(&client_id) else {
+            return false;
+        };
+        let Some(sid) = self.player_id_to_server_id.get(player_id) else {
+            return false;
+        };
+
+        *sid == server_id
+    }
+}
+
+pub fn set_associations(
+    mut assoc: ResMut<Associations>,
+    spawn_q: Query<(Entity, &ServerObject)>,
+    mut despawns: RemovedComponents<ServerObject>,
+) {
+    for (entity, server_obj) in spawn_q.iter() {
+        let server_id = server_obj.as_u64();
+        assoc.server_id_to_entity.insert(server_id, entity);
+        assoc.entity_to_server_id.insert(entity, server_id);
+    }
+
+    for entity in despawns.read() {
+        if let Some(server_id) = assoc.entity_to_server_id.get(&entity).map(|v| *v) {
+            assoc.server_id_to_entity.remove(&server_id);
+            assoc.entity_to_server_id.remove(&entity);
+        }
+    }
+}
 
 pub trait Interpolate {
     /// Interpolate between self and target for one tick.
@@ -72,7 +152,8 @@ impl ServerObject {
     }
 }
 
-pub fn broadcast_transforms_on_server(
+/// Sends a transform update for all server entities.
+pub fn send_transform_update(
     mut server: ResMut<RenetServer>,
     objs: Query<(&ServerObject, &Transform)>,
     tick: Res<Tick>,
@@ -186,7 +267,7 @@ pub fn apply_transform_on_client(
                         let ticks = tick.current.saturating_sub(update.tick);
                         for n in (1..ticks).rev() {
                             if let Some(input) = i_buf.inputs.get(n as usize) {
-                                game::move_player(&mut transform, input);
+                                game::move_player_from_input(&mut transform, input);
                             }
                         }
                     } else {
@@ -200,7 +281,8 @@ pub fn apply_transform_on_client(
     }
 }
 
-pub fn broadcast_bullets_on_server(
+/// Sends all new bullets to client as entity spawn.
+pub fn send_bullet_update(
     mut server: ResMut<RenetServer>,
     bullets: Query<(&Transform, &Bullet, &ServerObject), Added<Bullet>>,
 ) {
@@ -246,12 +328,15 @@ pub enum NetworkEntityType {
     },
 }
 
+#[derive(Component, Debug, PartialEq, Eq)]
+pub enum NetworkEntityTag {
+    Player,
+    NPC,
+    Bullet,
+}
+
 pub mod read {
-    use std::{
-        collections::VecDeque,
-        marker::PhantomData,
-        time::{Duration, SystemTime},
-    };
+    use std::{collections::VecDeque, time::Duration};
 
     use bevy::prelude::*;
     use bevy_renet::renet::{Bytes, ClientId, DefaultChannel, RenetClient, RenetServer};
@@ -340,6 +425,7 @@ pub mod read {
         pub reliable: Vec<RUMFromClientWithId>,
     }
 
+    /// Read raw incoming messages from clients to a buffer.
     pub fn recv_on_server(
         mut delay_msgs: ResMut<DelayedMessagesServer>,
         mut server: ResMut<RenetServer>,
@@ -456,7 +542,6 @@ pub mod tick {
     ) {
         timer.timer.tick(time.delta());
         if timer.timer.just_finished() {
-            info!("sending current tick");
             client.send_message(
                 DefaultChannel::ReliableUnordered,
                 RUMFromClient::BroadcastTick(tick.current),
@@ -464,7 +549,9 @@ pub mod tick {
         }
     }
 
-    pub fn broadcast_adjustment_on_server(
+    /// Checks for any client ticks, and broadcasts the tick adjustment they need
+    /// to be at the desired server tick.
+    pub fn send_adjustments(
         tick: Res<Tick>,
         msgs: Res<ServerMessages>,
         mut server: ResMut<RenetServer>,
@@ -550,6 +637,7 @@ pub mod input {
         player_id: PlayerId,
     }
 
+    /// Reads client inputs to a buffer.
     pub fn read_input_on_server(
         msgs: Res<ServerMessages>,
         mut i_buf: ResMut<InputMapBuffer>,
@@ -564,7 +652,6 @@ pub mod input {
                     continue;
                 }
                 let tick_diff = input.tick - tick.current;
-                info!("tick diff: {tick_diff}");
                 if let Some(buf) = i_buf.inputs.get_mut(tick_diff as usize) {
                     buf.insert(msg.id, input.input.clone());
                 } else {
@@ -645,15 +732,17 @@ pub mod conn {
     };
 
     use super::{
-        read::ServerMessages, tick::Tick, NetworkEntity, NetworkEntityType, RUMFromClient,
-        ServerObject,
+        read::ServerMessages, tick::Tick, Associations, NetworkEntity, NetworkEntityType,
+        RUMFromClient, ServerObject,
     };
 
-    pub fn handle_connect_on_server(
+    /// Sends current tick to clients who have connected. Sends leave event and despawns
+    /// clients who have left.
+    pub fn handle_client_connect_and_disconnect(
         mut cmds: Commands,
         mut server_events: EventReader<ServerEvent>,
         mut server: ResMut<RenetServer>,
-        player_q: Query<(Entity, &Player, &ServerObject)>,
+        assoc: Res<Associations>,
         tick: Res<Tick>,
     ) {
         // TODO: broadcast player join/leave events.
@@ -669,18 +758,13 @@ pub mod conn {
                 }
                 ServerEvent::ClientDisconnected { client_id, reason } => {
                     info!("client {client_id} disconnected because {reason}");
-                    for (entity, player, server_obj) in player_q.iter() {
-                        if player.id == client_id.raw() {
-                            cmds.entity(entity).despawn_recursive();
-                            let leave_payload = RUMFromServer::PlayerLeft {
-                                server_obj: server_obj.as_u64(),
-                            };
-                            server.broadcast_message(
-                                DefaultChannel::ReliableUnordered,
-                                leave_payload,
-                            );
-                        }
-                    }
+                    let (entity, server_id, _) =
+                        assoc.get_data_for_client_id(client_id.raw()).unwrap();
+                    cmds.entity(entity).despawn_recursive();
+                    let leave_payload = RUMFromServer::PlayerLeft {
+                        server_obj: server_id,
+                    };
+                    server.broadcast_message(DefaultChannel::ReliableUnordered, leave_payload);
                 }
             }
         }
@@ -748,6 +832,391 @@ pub mod conn {
                         }),
                     );
                 }
+            }
+        }
+    }
+}
+
+pub mod chunk {
+    use bevy::input::keyboard::KeyboardInput;
+    use bevy::input::ButtonState;
+    use bevy::prelude::*;
+    use bevy::utils::{HashMap, HashSet};
+    use bevy_renet::renet::{ClientId, DefaultChannel, RenetServer};
+
+    use crate::game::{self, Bullet, Player};
+    use crate::netcode::Associations;
+
+    use super::read::ServerMessages;
+    use super::{NetworkEntity, NetworkEntityTag, RUMFromClient, RUMFromServer, ServerObject};
+
+    pub fn add_resources(app: &mut App) {
+        app.insert_resource(Associations::default());
+        app.insert_resource(ChunkManager::new(100.0));
+        app.insert_resource(EntityRequests::default());
+    }
+
+    #[derive(Debug)]
+    pub struct Chunk {
+        pos: IVec2,
+
+        /// Server objects present in the chunk.
+        server_ids: HashSet<u64>,
+    }
+
+    impl Chunk {
+        pub fn new(pos: IVec2) -> Self {
+            Self {
+                pos,
+                server_ids: HashSet::new(),
+            }
+        }
+    }
+
+    #[derive(Resource, Debug)]
+    pub struct ChunkManager {
+        chunk_size: f32,
+        chunks: HashMap<IVec2, Chunk>,
+    }
+
+    impl ChunkManager {
+        pub fn new(chunk_size: f32) -> Self {
+            Self {
+                chunk_size,
+                chunks: HashMap::new(),
+            }
+        }
+
+        /// Returns server ids of all entities in this and surrounding chunks.
+        pub fn server_ids_near(&self, chunk_pos: IVec2) -> HashSet<u64> {
+            let mut set = HashSet::new();
+            for chunk in self.chunks.values() {
+                // Check surrounding chunks. Diagnoal = (1^2 + 1^2) = 2
+                if (chunk.pos - chunk_pos).length_squared() <= 2 {
+                    set.extend(chunk.server_ids.iter());
+                }
+            }
+            set
+        }
+    }
+
+    pub fn world_pos_to_chunk_pos(chunk_size: f32, world_pos: Vec2) -> IVec2 {
+        (world_pos / chunk_size).floor().as_ivec2()
+    }
+
+    /// Updates chunk membership based on server entity transform.
+    pub fn update_chunk_members(
+        mut cmds: Commands,
+        assoc: Res<Associations>,
+        objs: Query<(Entity, &Transform, &ServerObject)>,
+        tags: Query<&NetworkEntityTag>,
+        mut cm: ResMut<ChunkManager>,
+        mut e_req: ResMut<EntityRequests>,
+        mut key: EventReader<KeyboardInput>,
+    ) {
+        let chunk_size = cm.chunk_size;
+
+        // Determine which chunks should be loaded.
+        let mut loaded = HashSet::<IVec2>::new();
+        for (entity, transform, _) in objs.iter() {
+            let Ok(tag) = tags.get(entity) else {
+                warn!("saw server entity without tag");
+                continue;
+            };
+
+            let world_pos = transform.translation.truncate();
+            let chunk_pos = world_pos_to_chunk_pos(chunk_size, world_pos);
+
+            if *tag == NetworkEntityTag::Player || *tag == NetworkEntityTag::NPC {
+                loaded.insert(chunk_pos);
+            }
+        }
+
+        // Add missing chunks
+        for chunk in loaded.iter() {
+            cm.chunks.entry(*chunk).or_insert(Chunk::new(*chunk));
+        }
+
+        // Update all loaded chunks.
+        for chunk in cm.chunks.values_mut() {
+            let (next, spawns, despawns) =
+                get_chunk_update(chunk_size, chunk, objs.iter().map(|v| (v.1, v.2)));
+            e_req.server_id_to_spawn.extend(spawns.into_iter());
+            e_req.server_id_to_despawn.extend(despawns.into_iter());
+            chunk.server_ids = next;
+        }
+
+        // Remove unloaded chunks.
+        cm.chunks.retain(|pos, _| loaded.contains(pos));
+
+        // Despawn entites in unloaded chunks.
+        for (e, transform, obj) in objs.iter() {
+            if !cm
+                .chunks
+                .contains_key(&get_chunk_pos(chunk_size, transform))
+            {
+                e_req.server_id_to_despawn.insert(obj.as_u64());
+                cmds.entity(e).despawn_recursive();
+            }
+        }
+
+        for k in key.read() {
+            if k.key_code == KeyCode::KeyP && k.state == ButtonState::Pressed {
+                dbg!(&cm);
+            }
+        }
+    }
+
+    fn get_chunk_update<'a>(
+        chunk_size: f32,
+        chunk: &Chunk,
+        objs: impl Iterator<Item = (&'a Transform, &'a ServerObject)>,
+    ) -> (HashSet<u64>, Vec<u64>, Vec<u64>) {
+        let next_occupants = objs
+            .filter_map(|(transform, server_obj)| {
+                let world_pos = transform.translation.truncate();
+                if world_pos_to_chunk_pos(chunk_size, world_pos) == chunk.pos {
+                    Some(server_obj.as_u64())
+                } else {
+                    None
+                }
+            })
+            .collect::<HashSet<_>>();
+
+        let spawns = chunk
+            .server_ids
+            .difference(&next_occupants)
+            .map(|v| *v)
+            .collect::<Vec<_>>();
+        let leaves = next_occupants
+            .difference(&chunk.server_ids)
+            .map(|v| *v)
+            .collect::<Vec<_>>();
+
+        (next_occupants, spawns, leaves)
+    }
+
+    #[derive(Resource, Default)]
+    pub struct EntityRequests {
+        server_id_to_spawn: HashSet<u64>,
+        server_id_to_despawn: HashSet<u64>,
+        server_id_needing_update: HashSet<u64>,
+    }
+
+    impl EntityRequests {
+        fn take(&mut self) -> (HashSet<u64>, HashSet<u64>, HashSet<u64>) {
+            (
+                std::mem::take(&mut self.server_id_to_spawn),
+                std::mem::take(&mut self.server_id_to_despawn),
+                std::mem::take(&mut self.server_id_needing_update),
+            )
+        }
+    }
+
+    pub fn broadcast_entity_spawns(world: &mut World) {
+        let (spawns, despawns, needing_update) =
+            world.get_resource_mut::<EntityRequests>().unwrap().take();
+
+        let assoc = world.remove_resource::<Associations>().unwrap();
+        let mut server = world.remove_resource::<RenetServer>().unwrap();
+        let cm = world.remove_resource::<ChunkManager>().unwrap();
+
+        for server_id in spawns {
+            let entity = assoc.server_id_to_entity.get(&server_id).unwrap();
+            let Some(e_ref) = world.get_entity(*entity) else {
+                // Entity despawned.
+                continue;
+            };
+            let net_entity = build_entity(&e_ref);
+
+            for client in clients_needing_update(server_id, &cm, &assoc) {
+                if !assoc.is_server_and_client_eq(server_id, client.raw()) {
+                    server.send_message(
+                        client,
+                        DefaultChannel::ReliableUnordered,
+                        RUMFromServer::EntitySpawn(net_entity.clone()),
+                    );
+                }
+            }
+        }
+
+        for server_id in despawns {
+            for client in clients_needing_update(server_id, &cm, &assoc) {
+                server.send_message(
+                    client,
+                    DefaultChannel::ReliableUnordered,
+                    RUMFromServer::EntityDespawn { server_id },
+                )
+            }
+        }
+
+        for server_id in needing_update {
+            let player_id = assoc.server_id_to_player_id.get(&server_id).unwrap();
+            let client_id = assoc.player_id_to_client_id.get(player_id).unwrap();
+
+            let chunk_pos = cm
+                .chunks
+                .values()
+                .find(|c| c.server_ids.contains(&server_id))
+                .unwrap()
+                .pos;
+
+            for server_id in cm.server_ids_near(chunk_pos) {
+                let entity = assoc.server_id_to_entity.get(&server_id).unwrap();
+                if !assoc.is_server_and_client_eq(server_id, *client_id) {
+                    server.send_message(
+                        ClientId::from_raw(*client_id),
+                        DefaultChannel::ReliableUnordered,
+                        RUMFromServer::EntitySpawn(build_entity(&world.entity(*entity))),
+                    );
+                }
+            }
+        }
+
+        world.insert_resource(assoc);
+        world.insert_resource(server);
+        world.insert_resource(cm);
+    }
+
+    fn get_chunk_pos(chunk_size: f32, transform: &Transform) -> IVec2 {
+        world_pos_to_chunk_pos(chunk_size, transform.translation.truncate())
+    }
+
+    fn build_entity(e_ref: &EntityRef) -> NetworkEntity {
+        match e_ref.get::<NetworkEntityTag>().unwrap() {
+            NetworkEntityTag::Player => build_player_entity(&e_ref),
+            NetworkEntityTag::Bullet => build_bullet_entity(&e_ref),
+            NetworkEntityTag::NPC => build_npc_entity(&e_ref),
+        }
+    }
+
+    fn build_player_entity(e_ref: &EntityRef) -> NetworkEntity {
+        NetworkEntity {
+            server_id: e_ref.get::<ServerObject>().unwrap().as_u64(),
+            data: super::NetworkEntityType::Player {
+                id: e_ref.get::<Player>().unwrap().id,
+                transform: *e_ref.get::<Transform>().unwrap(),
+            },
+        }
+    }
+
+    fn build_npc_entity(e_ref: &EntityRef) -> NetworkEntity {
+        NetworkEntity {
+            server_id: e_ref.get::<ServerObject>().unwrap().as_u64(),
+            data: super::NetworkEntityType::NPC {
+                transform: *e_ref.get::<Transform>().unwrap(),
+            },
+        }
+    }
+
+    fn build_bullet_entity(e_ref: &EntityRef) -> NetworkEntity {
+        NetworkEntity {
+            server_id: e_ref.get::<ServerObject>().unwrap().as_u64(),
+            data: super::NetworkEntityType::Bullet {
+                bullet: e_ref.get::<Bullet>().unwrap().clone(),
+                transform: *e_ref.get::<Transform>().unwrap(),
+            },
+        }
+    }
+
+    fn clients_needing_update(
+        server_id: u64,
+        cm: &ChunkManager,
+        assoc: &Associations,
+    ) -> Vec<ClientId> {
+        let chunk = cm
+            .chunks
+            .values()
+            .find(|c| c.server_ids.contains(&server_id));
+        let Some(chunk) = chunk else {
+            return vec![];
+        };
+
+        let proximity = cm.server_ids_near(chunk.pos);
+        proximity
+            .iter()
+            .filter_map(|v| {
+                let player = assoc.server_id_to_player_id.get(v)?;
+                let raw_client = assoc.player_id_to_client_id.get(player)?;
+                Some(ClientId::from_raw(*raw_client))
+            })
+            .collect()
+    }
+
+    /// Checks if any new clients have marked themselves as having started the game,
+    /// and marks them as needing a full chunk (and nearby chunks) update.
+    pub fn check_new_players(
+        mut cmds: Commands,
+        msgs: Res<ServerMessages>,
+        mut assoc: ResMut<Associations>,
+        mut e_req: ResMut<EntityRequests>,
+        mut server: ResMut<RenetServer>,
+    ) {
+        for msg in msgs.reliable.iter() {
+            if let RUMFromClient::StartedGame = msg.msg {
+                let server_id = rand::random();
+                let entity =
+                    game::spawn_player(&mut cmds, server_id, msg.id, Transform::default(), false);
+                let join_payload = RUMFromServer::PlayerJoined {
+                    server_obj: server_id,
+                    id: msg.id,
+                    transform: Transform::default(),
+                };
+                server.broadcast_message(DefaultChannel::ReliableUnordered, join_payload);
+
+                e_req.server_id_needing_update.insert(server_id);
+                let player_id = msg.id;
+                assoc.create_player(player_id, server_id, msg.id, entity);
+            }
+        }
+    }
+
+    #[derive(Component)]
+    pub struct ChunkText(IVec2);
+
+    pub fn draw_loaded_chunks(
+        mut cmds: Commands,
+        chunks: Query<(Entity, &ChunkText)>,
+        cm: Res<ChunkManager>,
+        assets: Res<AssetServer>,
+    ) {
+        let border = assets.load("border_1px_white.png");
+        for chunk in cm.chunks.values() {
+            if !chunks.iter().any(|(_, ct)| ct.0 == chunk.pos) {
+                let center = ((chunk.pos.as_vec2() * cm.chunk_size)
+                    + Vec2::new(cm.chunk_size / 2.0, cm.chunk_size / 2.0))
+                .extend(1.0);
+                cmds.spawn((
+                    ChunkText(chunk.pos),
+                    Text2dBundle {
+                        text: Text::from_section(
+                            format!("x: {}, y: {}", chunk.pos.x, chunk.pos.y),
+                            TextStyle::default(),
+                        ),
+                        transform: Transform::from_translation(center),
+                        ..Default::default()
+                    },
+                ))
+                .insert(SpriteBundle {
+                    transform: Transform::from_translation(center),
+                    texture: border.clone(),
+                    sprite: Sprite {
+                        custom_size: Some(Vec2::new(cm.chunk_size, cm.chunk_size)),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                })
+                .insert(ImageScaleMode::Sliced(TextureSlicer {
+                    border: BorderRect::square(1.0),
+                    center_scale_mode: SliceScaleMode::Stretch,
+                    ..default()
+                }));
+            }
+        }
+
+        for (e, chunk) in chunks.iter() {
+            if !cm.chunks.contains_key(&chunk.0) {
+                cmds.entity(e).despawn_recursive();
             }
         }
     }

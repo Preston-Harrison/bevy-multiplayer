@@ -8,8 +8,8 @@ use crate::{
         input::{Input, InputBuffer, InputMapBuffer},
         read::ClientMessages,
         tick::Tick,
-        ClientInfo, Deterministic, LocalPlayer, NetworkEntityType, PlayerId, PrespawnBehavior,
-        Prespawned, RUMFromServer, ServerObject,
+        ClientInfo, Deterministic, LocalPlayer, NetworkEntityTag, NetworkEntityType, PlayerId,
+        PrespawnBehavior, Prespawned, RUMFromServer, ServerObject,
     },
     TICK_TIME,
 };
@@ -79,6 +79,7 @@ pub fn run_game_logic_on_client(world: &mut World) {
     tick.current = current;
 }
 
+/// Runs the game logic schedule a single time.
 pub fn run_game_logic_on_server(world: &mut World) {
     world.run_schedule(GameLogic);
 }
@@ -88,14 +89,14 @@ pub struct Player {
     pub id: PlayerId,
 }
 
-pub fn move_player(transform: &mut Transform, input: &Input) {
+pub fn move_player_from_input(transform: &mut Transform, input: &Input) {
     const SPEED: f32 = 100.0;
 
     transform.translation.x += input.x as f32 * SPEED * TICK_TIME as f32;
     transform.translation.y += input.y as f32 * SPEED * TICK_TIME as f32;
 }
 
-pub fn move_on_client(
+pub fn handle_local_input(
     mut cmds: Commands,
     i_buf: Res<InputBuffer>,
     mut player: Query<&mut Transform, With<LocalPlayer>>,
@@ -105,7 +106,7 @@ pub fn move_on_client(
             return;
         }
         let mut transform = player.get_single_mut().unwrap();
-        move_player(&mut transform, input);
+        move_player_from_input(&mut transform, input);
 
         if let Some(ref shot) = input.shoot {
             let entity = spawn_bullet(
@@ -121,7 +122,7 @@ pub fn move_on_client(
     }
 }
 
-pub fn move_on_server(
+pub fn handle_clients_input(
     mut cmds: Commands,
     mut i_buf: ResMut<InputMapBuffer>,
     mut players: Query<(&mut Transform, &Player)>,
@@ -133,7 +134,7 @@ pub fn move_on_server(
     for (id, input) in inputs.iter() {
         for (mut transform, player) in players.iter_mut() {
             if *id == player.id {
-                move_player(&mut transform, input);
+                move_player_from_input(&mut transform, input);
 
                 if let Some(ref shot) = input.shoot {
                     spawn_bullet(
@@ -165,7 +166,7 @@ pub fn spawn_player(
     player_id: PlayerId,
     transform: Transform,
     is_local: bool,
-) {
+) -> Entity {
     let mut builder = cmds.spawn((
         Player { id: player_id },
         ServerObject::from_u64(server_obj),
@@ -181,12 +182,15 @@ pub fn spawn_player(
             },
             ..Default::default()
         },
+        NetworkEntityTag::Player,
     ));
     builder.insert(transform);
 
     if is_local {
         builder.insert(LocalPlayer);
     }
+
+    builder.id()
 }
 
 pub fn spawn_network_entities_on_client(
@@ -194,6 +198,7 @@ pub fn spawn_network_entities_on_client(
     msgs: Res<ClientMessages>,
     c_info: Res<ClientInfo>,
     prespawns: Query<(Entity, &Prespawned, &ServerObject)>,
+    objs: Query<(Entity, &ServerObject, &NetworkEntityTag)>,
 ) {
     for msg in msgs.reliable.iter() {
         match msg {
@@ -201,7 +206,9 @@ pub fn spawn_network_entities_on_client(
                 server_obj,
                 id,
                 transform,
-            } => spawn_player(&mut cmds, *server_obj, *id, *transform, c_info.id == *id),
+            } => {
+                spawn_player(&mut cmds, *server_obj, *id, *transform, c_info.id == *id);
+            }
             RUMFromServer::EntitySpawn(spawn) => match &spawn.data {
                 NetworkEntityType::Player { id, transform } => {
                     if *id == c_info.id {
@@ -214,12 +221,13 @@ pub fn spawn_network_entities_on_client(
                         *id,
                         *transform,
                         c_info.id == *id,
-                    )
+                    );
                 }
                 NetworkEntityType::NPC { transform } => {
                     let mut e = cmds.spawn((
                         square(Color::BLUE, 10.0),
                         ServerObject::from_u64(spawn.server_id),
+                        NetworkEntityTag::NPC,
                     ));
                     e.insert(TransformBundle::from_transform(*transform));
                 }
@@ -243,6 +251,15 @@ pub fn spawn_network_entities_on_client(
                     }
                 }
             },
+            RUMFromServer::EntityDespawn { server_id } => {
+                for (e, obj, tag) in objs.iter() {
+                    if obj.as_u64() == *server_id {
+                        info!("server said to despawn {:?}", tag);
+                        cmds.entity(e).despawn_recursive();
+                        break;
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -272,6 +289,7 @@ pub fn spawn_npc_on_server(mut cmds: Commands) {
         },
         square(Color::BLUE, 10.0),
         ServerObject::from_u64(rand::random()),
+        NetworkEntityTag::NPC,
     ));
 }
 
@@ -348,6 +366,7 @@ fn spawn_bullet(
         square(Color::ORANGE, 5.0),
         Deterministic::<Transform>::default(),
         ServerObject::from_u64(server_id),
+        NetworkEntityTag::Bullet,
     ));
     b.insert(TransformBundle::from_transform(transform));
     b.id()
