@@ -207,12 +207,14 @@ pub fn spawn_network_entities_on_client(
                 id,
                 transform,
             } => {
-                spawn_player(&mut cmds, *server_obj, *id, *transform, c_info.id == *id);
+                if *id == c_info.id {
+                    spawn_player(&mut cmds, *server_obj, *id, *transform, true);
+                }
             }
             RUMFromServer::EntitySpawn(spawn) => match &spawn.data {
                 NetworkEntityType::Player { id, transform } => {
                     if *id == c_info.id {
-                        warn!("got spawn request for current client");
+                        warn!("got spawn request for current client {id}");
                         continue;
                     }
                     spawn_player(
@@ -252,12 +254,17 @@ pub fn spawn_network_entities_on_client(
                 }
             },
             RUMFromServer::EntityDespawn { server_id } => {
+                let mut did_despawn = false;
                 for (e, obj, tag) in objs.iter() {
                     if obj.as_u64() == *server_id {
                         info!("server said to despawn {:?}", tag);
                         cmds.entity(e).despawn_recursive();
+                        did_despawn = true;
                         break;
                     }
+                }
+                if !did_despawn {
+                    warn!("tried to despawn non existant entity");
                 }
             }
             _ => {}
@@ -309,8 +316,8 @@ pub fn move_npc_on_server(mut npcs: Query<(&mut Transform, &mut NPC)>, time: Res
                 }
                 None => {
                     npc.target = Some((
-                        rand::random::<f32>() * 200.0 - 100.0,
-                        rand::random::<f32>() * 200.0 - 100.0,
+                        rand::random::<f32>() * 500.0 - 250.0,
+                        rand::random::<f32>() * 500.0 - 250.0,
                     ))
                 }
             }
@@ -340,18 +347,9 @@ pub fn move_npc_on_server(mut npcs: Query<(&mut Transform, &mut NPC)>, time: Res
     }
 }
 
-#[derive(Serialize, Deserialize, Component, Clone)]
+#[derive(Serialize, Deserialize, Component, Clone, Debug)]
 pub struct Bullet {
     velocity: Vec2,
-}
-
-pub fn spawn_startup_bullet(mut cmds: Commands) {
-    spawn_bullet(
-        &mut cmds,
-        Transform::default(),
-        Vec2::Y * BULLET_SPEED,
-        rand::random(),
-    );
 }
 
 fn spawn_bullet(

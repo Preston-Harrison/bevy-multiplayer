@@ -1,3 +1,5 @@
+#![allow(irrefutable_let_patterns)]
+
 use bevy::prelude::*;
 use bevy_renet::{
     renet::{
@@ -25,6 +27,7 @@ use std::{
 mod game;
 mod netcode;
 mod utils;
+mod chunk;
 
 const TICK_TIME: f64 = 1.0 / 20.0;
 
@@ -187,7 +190,6 @@ fn server(server_addr: SocketAddr, latency: u64) {
             netcode::input::read_input_on_server,
             // Run simulation, send updates for current tick, then update tick.
             game::run_game_logic_on_server,
-            netcode::set_associations,
             netcode::chunk::check_new_players,
             netcode::chunk::update_chunk_members,
             netcode::chunk::draw_loaded_chunks,
@@ -197,6 +199,7 @@ fn server(server_addr: SocketAddr, latency: u64) {
             netcode::conn::handle_client_connect_and_disconnect,
             // netcode::conn::send_join_messages_on_server,
             netcode::chunk::broadcast_entity_spawns,
+            netcode::cleanup_deleted_server_objs,
         )
             .chain(),
     );

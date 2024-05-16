@@ -5,6 +5,7 @@ use bevy_renet::renet::{DefaultChannel, RenetServer};
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    chunk::ChunkManager,
     game::{self, Bullet},
     impl_bytes,
 };
@@ -53,16 +54,6 @@ impl Associations {
         self.entity_to_server_id.insert(entity, server_id);
     }
 
-    pub fn remove_player(&mut self, player_id: u64) {
-        let server_id = self.player_id_to_server_id.remove(&player_id).unwrap();
-        let client_id = self.player_id_to_client_id.remove(&player_id).unwrap();
-        let entity = self.server_id_to_entity.remove(&server_id).unwrap();
-
-        self.client_id_to_player_id.remove(&client_id);
-        self.server_id_to_player_id.remove(&server_id);
-        self.entity_to_server_id.remove(&entity);
-    }
-
     /// Returns (entity, server_id, player_id) for a client id.
     pub fn get_data_for_client_id(&self, client_id: u64) -> Option<(Entity, u64, u64)> {
         let player_id = self.client_id_to_player_id.get(&client_id)?;
@@ -70,35 +61,32 @@ impl Associations {
         let entity = self.server_id_to_entity.get(server_id)?;
         Some((*entity, *server_id, *player_id))
     }
-
-    pub fn is_server_and_client_eq(&self, server_id: u64, client_id: u64) -> bool {
-        let Some(player_id) = self.client_id_to_player_id.get(&client_id) else {
-            return false;
-        };
-        let Some(sid) = self.player_id_to_server_id.get(player_id) else {
-            return false;
-        };
-
-        *sid == server_id
-    }
 }
 
-pub fn set_associations(
+pub fn cleanup_deleted_server_objs(
+    mut cm: ResMut<ChunkManager>,
     mut assoc: ResMut<Associations>,
-    spawn_q: Query<(Entity, &ServerObject)>,
-    mut despawns: RemovedComponents<ServerObject>,
+    mut reader: RemovedComponents<ServerObject>,
 ) {
-    for (entity, server_obj) in spawn_q.iter() {
-        let server_id = server_obj.as_u64();
-        assoc.server_id_to_entity.insert(server_id, entity);
-        assoc.entity_to_server_id.insert(entity, server_id);
-    }
+    for entity in reader.read() {
 
-    for entity in despawns.read() {
-        if let Some(server_id) = assoc.entity_to_server_id.get(&entity).map(|v| *v) {
-            assoc.server_id_to_entity.remove(&server_id);
-            assoc.entity_to_server_id.remove(&entity);
-        }
+        let Some(server_id) = assoc.entity_to_server_id.remove(&entity) else {
+            warn!("tried to clean up entity with no server id");
+            continue;
+        };
+        assoc.server_id_to_entity.remove(&server_id);
+        cm.despawn(server_id);
+
+        let Some(player_id) = assoc.server_id_to_player_id.remove(&server_id) else {
+            continue;
+        };
+        assoc.player_id_to_server_id.remove(&player_id);
+
+        let Some(client_id) = assoc.player_id_to_client_id.remove(&player_id) else {
+            warn!("saw server with no client");
+            continue;
+        };
+        assoc.client_id_to_player_id.remove(&client_id);
     }
 }
 
@@ -127,9 +115,10 @@ pub struct Prespawned {
 
 #[derive(Eq, PartialEq)]
 pub enum PrespawnBehavior {
-    // Will ignore spawn requests.
+    /// Will ignore spawn requests.
     Ignore,
-    // Will delete this entity and replace it with the server entity.
+    /// Will delete this entity and replace it with the server entity.
+    #[allow(dead_code)]
     Replace,
 }
 
@@ -281,25 +270,6 @@ pub fn apply_transform_on_client(
     }
 }
 
-/// Sends all new bullets to client as entity spawn.
-pub fn send_bullet_update(
-    mut server: ResMut<RenetServer>,
-    bullets: Query<(&Transform, &Bullet, &ServerObject), Added<Bullet>>,
-) {
-    for (transform, bullet, server_obj) in bullets.iter() {
-        server.broadcast_message(
-            DefaultChannel::ReliableUnordered,
-            RUMFromServer::EntitySpawn(NetworkEntity {
-                server_id: server_obj.as_u64(),
-                data: NetworkEntityType::Bullet {
-                    bullet: bullet.clone(),
-                    transform: *transform,
-                },
-            }),
-        );
-    }
-}
-
 impl Interpolate for Transform {
     fn interpolate(&mut self, target: &Self) {
         // 0.1 for 10% movement towards the target each tick
@@ -307,13 +277,13 @@ impl Interpolate for Transform {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct NetworkEntity {
     pub data: NetworkEntityType,
     pub server_id: u64,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum NetworkEntityType {
     Player {
         id: PlayerId,
@@ -328,7 +298,7 @@ pub enum NetworkEntityType {
     },
 }
 
-#[derive(Component, Debug, PartialEq, Eq)]
+#[derive(Component, Debug, PartialEq, Eq, Clone, Copy)]
 pub enum NetworkEntityTag {
     Player,
     NPC,
@@ -347,13 +317,6 @@ pub mod read {
         RUMFromClient, RUMFromClientWithId, RUMFromServer, UMFromClient, UMFromClientWithId,
         UMFromServer,
     };
-
-    trait MessageStore {
-        type Reliable;
-        type Unreliable;
-        fn unreliable(&mut self) -> &mut Vec<Self::Unreliable>;
-        fn reliable(&mut self) -> &mut Vec<Self::Reliable>;
-    }
 
     /// Allows for mock latency.
     #[derive(Resource)]
@@ -724,17 +687,11 @@ pub mod conn {
         log::info,
         prelude::*,
     };
-    use bevy_renet::renet::{ClientId, DefaultChannel, RenetServer, ServerEvent};
+    use bevy_renet::renet::{DefaultChannel, RenetServer, ServerEvent};
 
-    use crate::{
-        game::{self, Bullet, Player, NPC},
-        netcode::RUMFromServer,
-    };
+    use crate::netcode::RUMFromServer;
 
-    use super::{
-        read::ServerMessages, tick::Tick, Associations, NetworkEntity, NetworkEntityType,
-        RUMFromClient, ServerObject,
-    };
+    use super::{tick::Tick, Associations};
 
     /// Sends current tick to clients who have connected. Sends leave event and despawns
     /// clients who have left.
@@ -760,77 +717,12 @@ pub mod conn {
                     info!("client {client_id} disconnected because {reason}");
                     let (entity, server_id, _) =
                         assoc.get_data_for_client_id(client_id.raw()).unwrap();
+
                     cmds.entity(entity).despawn_recursive();
                     let leave_payload = RUMFromServer::PlayerLeft {
                         server_obj: server_id,
                     };
                     server.broadcast_message(DefaultChannel::ReliableUnordered, leave_payload);
-                }
-            }
-        }
-    }
-
-    pub fn send_join_messages_on_server(
-        mut cmds: Commands,
-        msgs: Res<ServerMessages>,
-        mut server: ResMut<RenetServer>,
-        players: Query<(&ServerObject, &Player, &Transform)>,
-        npcs: Query<(&ServerObject, &Transform), With<NPC>>,
-        bullets: Query<(&ServerObject, &Transform, &Bullet)>,
-    ) {
-        for msg in msgs.reliable.iter() {
-            if let RUMFromClient::StartedGame = msg.msg {
-                let server_obj = rand::random();
-                game::spawn_player(&mut cmds, server_obj, msg.id, Transform::default(), false);
-                let join_payload = RUMFromServer::PlayerJoined {
-                    server_obj,
-                    id: msg.id,
-                    transform: Transform::default(),
-                };
-                server.broadcast_message(DefaultChannel::ReliableUnordered, join_payload);
-
-                for (obj, player, transform) in players.iter() {
-                    if player.id == msg.id {
-                        continue;
-                    }
-                    server.send_message(
-                        ClientId::from_raw(msg.id),
-                        DefaultChannel::ReliableUnordered,
-                        RUMFromServer::EntitySpawn(NetworkEntity {
-                            server_id: obj.as_u64(),
-                            data: NetworkEntityType::Player {
-                                id: player.id,
-                                transform: *transform,
-                            },
-                        }),
-                    );
-                }
-
-                for (obj, transform) in npcs.iter() {
-                    server.send_message(
-                        ClientId::from_raw(msg.id),
-                        DefaultChannel::ReliableUnordered,
-                        RUMFromServer::EntitySpawn(NetworkEntity {
-                            server_id: obj.as_u64(),
-                            data: NetworkEntityType::NPC {
-                                transform: *transform,
-                            },
-                        }),
-                    );
-                }
-
-                for (obj, transform, bullet) in bullets.iter() {
-                    server.send_message(
-                        ClientId::from_raw(msg.id),
-                        DefaultChannel::ReliableUnordered,
-                        RUMFromServer::EntitySpawn(NetworkEntity {
-                            server_id: obj.as_u64(),
-                            data: NetworkEntityType::Bullet {
-                                bullet: bullet.clone(),
-                                transform: *transform,
-                            },
-                        }),
-                    );
                 }
             }
         }
@@ -841,9 +733,10 @@ pub mod chunk {
     use bevy::input::keyboard::KeyboardInput;
     use bevy::input::ButtonState;
     use bevy::prelude::*;
-    use bevy::utils::{HashMap, HashSet};
+    use bevy::utils::HashSet;
     use bevy_renet::renet::{ClientId, DefaultChannel, RenetServer};
 
+    use crate::chunk;
     use crate::game::{self, Bullet, Player};
     use crate::netcode::Associations;
 
@@ -852,56 +745,13 @@ pub mod chunk {
 
     pub fn add_resources(app: &mut App) {
         app.insert_resource(Associations::default());
-        app.insert_resource(ChunkManager::new(100.0));
-        app.insert_resource(EntityRequests::default());
+        app.insert_resource(chunk::ChunkManager::new(100.0));
+        app.insert_resource(GameSyncRequest::default());
     }
 
-    #[derive(Debug)]
-    pub struct Chunk {
-        pos: IVec2,
-
-        /// Server objects present in the chunk.
-        server_ids: HashSet<u64>,
-    }
-
-    impl Chunk {
-        pub fn new(pos: IVec2) -> Self {
-            Self {
-                pos,
-                server_ids: HashSet::new(),
-            }
-        }
-    }
-
-    #[derive(Resource, Debug)]
-    pub struct ChunkManager {
-        chunk_size: f32,
-        chunks: HashMap<IVec2, Chunk>,
-    }
-
-    impl ChunkManager {
-        pub fn new(chunk_size: f32) -> Self {
-            Self {
-                chunk_size,
-                chunks: HashMap::new(),
-            }
-        }
-
-        /// Returns server ids of all entities in this and surrounding chunks.
-        pub fn server_ids_near(&self, chunk_pos: IVec2) -> HashSet<u64> {
-            let mut set = HashSet::new();
-            for chunk in self.chunks.values() {
-                // Check surrounding chunks. Diagnoal = (1^2 + 1^2) = 2
-                if (chunk.pos - chunk_pos).length_squared() <= 2 {
-                    set.extend(chunk.server_ids.iter());
-                }
-            }
-            set
-        }
-    }
-
-    pub fn world_pos_to_chunk_pos(chunk_size: f32, world_pos: Vec2) -> IVec2 {
-        (world_pos / chunk_size).floor().as_ivec2()
+    #[derive(Resource, Default)]
+    pub struct GameSyncRequest {
+        client_ids: HashSet<u64>,
     }
 
     /// Updates chunk membership based on server entity transform.
@@ -909,55 +759,35 @@ pub mod chunk {
         mut cmds: Commands,
         assoc: Res<Associations>,
         objs: Query<(Entity, &Transform, &ServerObject)>,
-        tags: Query<&NetworkEntityTag>,
-        mut cm: ResMut<ChunkManager>,
-        mut e_req: ResMut<EntityRequests>,
+        tags: Query<(Entity, &ServerObject, &NetworkEntityTag)>,
+        mut cm: ResMut<chunk::ChunkManager>,
         mut key: EventReader<KeyboardInput>,
     ) {
-        let chunk_size = cm.chunk_size;
+        let chunk_size = cm.chunk_size();
 
-        // Determine which chunks should be loaded.
-        let mut loaded = HashSet::<IVec2>::new();
-        for (entity, transform, _) in objs.iter() {
-            let Ok(tag) = tags.get(entity) else {
-                warn!("saw server entity without tag");
-                continue;
+        for (_, t, obj) in objs.iter() {
+            let chunk_pos = chunk::transform_to_chunk_pos(chunk_size, *t);
+            cm.load_chunks_near(chunk_pos);
+            cm.set_chunk_location(obj.as_u64(), chunk_pos);
+        }
+
+        let observers = tags
+            .iter()
+            .filter_map(|(_, server_obj, tag)| {
+                if *tag == NetworkEntityTag::NPC || *tag == NetworkEntityTag::Player {
+                    Some(server_obj.as_u64())
+                } else {
+                    None
+                }
+            })
+            .collect::<HashSet<u64>>();
+
+        let dangling = cm.purge_chunks(&observers);
+
+        for dangler in dangling.iter() {
+            if let Some(entity) = assoc.server_id_to_entity.get(dangler) {
+                cmds.entity(*entity).despawn_recursive();
             };
-
-            let world_pos = transform.translation.truncate();
-            let chunk_pos = world_pos_to_chunk_pos(chunk_size, world_pos);
-
-            if *tag == NetworkEntityTag::Player || *tag == NetworkEntityTag::NPC {
-                loaded.insert(chunk_pos);
-            }
-        }
-
-        // Add missing chunks
-        for chunk in loaded.iter() {
-            cm.chunks.entry(*chunk).or_insert(Chunk::new(*chunk));
-        }
-
-        // Update all loaded chunks.
-        for chunk in cm.chunks.values_mut() {
-            let (next, spawns, despawns) =
-                get_chunk_update(chunk_size, chunk, objs.iter().map(|v| (v.1, v.2)));
-            e_req.server_id_to_spawn.extend(spawns.into_iter());
-            e_req.server_id_to_despawn.extend(despawns.into_iter());
-            chunk.server_ids = next;
-        }
-
-        // Remove unloaded chunks.
-        cm.chunks.retain(|pos, _| loaded.contains(pos));
-
-        // Despawn entites in unloaded chunks.
-        for (e, transform, obj) in objs.iter() {
-            if !cm
-                .chunks
-                .contains_key(&get_chunk_pos(chunk_size, transform))
-            {
-                e_req.server_id_to_despawn.insert(obj.as_u64());
-                cmds.entity(e).despawn_recursive();
-            }
         }
 
         for k in key.read() {
@@ -967,119 +797,80 @@ pub mod chunk {
         }
     }
 
-    fn get_chunk_update<'a>(
-        chunk_size: f32,
-        chunk: &Chunk,
-        objs: impl Iterator<Item = (&'a Transform, &'a ServerObject)>,
-    ) -> (HashSet<u64>, Vec<u64>, Vec<u64>) {
-        let next_occupants = objs
-            .filter_map(|(transform, server_obj)| {
-                let world_pos = transform.translation.truncate();
-                if world_pos_to_chunk_pos(chunk_size, world_pos) == chunk.pos {
-                    Some(server_obj.as_u64())
-                } else {
-                    None
-                }
-            })
-            .collect::<HashSet<_>>();
-
-        let spawns = chunk
-            .server_ids
-            .difference(&next_occupants)
-            .map(|v| *v)
-            .collect::<Vec<_>>();
-        let leaves = next_occupants
-            .difference(&chunk.server_ids)
-            .map(|v| *v)
-            .collect::<Vec<_>>();
-
-        (next_occupants, spawns, leaves)
-    }
-
-    #[derive(Resource, Default)]
-    pub struct EntityRequests {
-        server_id_to_spawn: HashSet<u64>,
-        server_id_to_despawn: HashSet<u64>,
-        server_id_needing_update: HashSet<u64>,
-    }
-
-    impl EntityRequests {
-        fn take(&mut self) -> (HashSet<u64>, HashSet<u64>, HashSet<u64>) {
-            (
-                std::mem::take(&mut self.server_id_to_spawn),
-                std::mem::take(&mut self.server_id_to_despawn),
-                std::mem::take(&mut self.server_id_needing_update),
-            )
-        }
-    }
-
     pub fn broadcast_entity_spawns(world: &mut World) {
-        let (spawns, despawns, needing_update) =
-            world.get_resource_mut::<EntityRequests>().unwrap().take();
-
+        let syncs = std::mem::take(
+            &mut world
+                .get_resource_mut::<GameSyncRequest>()
+                .unwrap()
+                .client_ids,
+        );
         let assoc = world.remove_resource::<Associations>().unwrap();
         let mut server = world.remove_resource::<RenetServer>().unwrap();
-        let cm = world.remove_resource::<ChunkManager>().unwrap();
+        let mut cm = world.remove_resource::<chunk::ChunkManager>().unwrap();
 
-        for server_id in spawns {
-            let entity = assoc.server_id_to_entity.get(&server_id).unwrap();
-            let Some(e_ref) = world.get_entity(*entity) else {
-                // Entity despawned.
-                continue;
-            };
-            let net_entity = build_entity(&e_ref);
+        for (client_id, player_id) in assoc.client_id_to_player_id.iter() {
+            let server_id = assoc.player_id_to_server_id.get(player_id).unwrap();
 
-            for client in clients_needing_update(server_id, &cm, &assoc) {
-                if !assoc.is_server_and_client_eq(server_id, client.raw()) {
+            if syncs.contains(client_id) {
+                for spawn in cm.get_nearby_occupants(*server_id) {
+                    if spawn == *server_id {
+                        continue;
+                    }
+                    let entity = assoc
+                        .server_id_to_entity
+                        .get(&spawn)
+                        .expect("server id must have entity");
+                    let Some(e_ref) = world.get_entity(*entity) else {
+                        // Entity despawned.
+                        continue;
+                    };
+                    let net_entity = build_entity(&e_ref);
+
                     server.send_message(
-                        client,
+                        ClientId::from_raw(*client_id),
                         DefaultChannel::ReliableUnordered,
                         RUMFromServer::EntitySpawn(net_entity.clone()),
                     );
                 }
-            }
-        }
+            } else {
+                for spawn in cm.get_nearby_spawns(*server_id) {
+                    if spawn == *server_id {
+                        continue;
+                    }
+                    let entity = assoc.server_id_to_entity.get(&spawn).unwrap();
+                    let Some(e_ref) = world.get_entity(*entity) else {
+                        // Entity despawned.
+                        continue;
+                    };
+                    let net_entity = build_entity(&e_ref);
 
-        for server_id in despawns {
-            for client in clients_needing_update(server_id, &cm, &assoc) {
-                server.send_message(
-                    client,
-                    DefaultChannel::ReliableUnordered,
-                    RUMFromServer::EntityDespawn { server_id },
-                )
-            }
-        }
-
-        for server_id in needing_update {
-            let player_id = assoc.server_id_to_player_id.get(&server_id).unwrap();
-            let client_id = assoc.player_id_to_client_id.get(player_id).unwrap();
-
-            let chunk_pos = cm
-                .chunks
-                .values()
-                .find(|c| c.server_ids.contains(&server_id))
-                .unwrap()
-                .pos;
-
-            for server_id in cm.server_ids_near(chunk_pos) {
-                let entity = assoc.server_id_to_entity.get(&server_id).unwrap();
-                if !assoc.is_server_and_client_eq(server_id, *client_id) {
+                    info!("sent spawn for {}", spawn);
                     server.send_message(
                         ClientId::from_raw(*client_id),
                         DefaultChannel::ReliableUnordered,
-                        RUMFromServer::EntitySpawn(build_entity(&world.entity(*entity))),
+                        RUMFromServer::EntitySpawn(net_entity.clone()),
+                    );
+                }
+
+                for despawn in cm.get_nearby_despawns(*server_id) {
+                    if despawn == *server_id {
+                        continue;
+                    }
+                    info!("sent despawn for {}", despawn);
+                    server.send_message(
+                        ClientId::from_raw(*client_id),
+                        DefaultChannel::ReliableUnordered,
+                        RUMFromServer::EntityDespawn { server_id: despawn },
                     );
                 }
             }
         }
 
+        cm.update_visible_objs();
+
         world.insert_resource(assoc);
         world.insert_resource(server);
         world.insert_resource(cm);
-    }
-
-    fn get_chunk_pos(chunk_size: f32, transform: &Transform) -> IVec2 {
-        world_pos_to_chunk_pos(chunk_size, transform.translation.truncate())
     }
 
     fn build_entity(e_ref: &EntityRef) -> NetworkEntity {
@@ -1119,37 +910,13 @@ pub mod chunk {
         }
     }
 
-    fn clients_needing_update(
-        server_id: u64,
-        cm: &ChunkManager,
-        assoc: &Associations,
-    ) -> Vec<ClientId> {
-        let chunk = cm
-            .chunks
-            .values()
-            .find(|c| c.server_ids.contains(&server_id));
-        let Some(chunk) = chunk else {
-            return vec![];
-        };
-
-        let proximity = cm.server_ids_near(chunk.pos);
-        proximity
-            .iter()
-            .filter_map(|v| {
-                let player = assoc.server_id_to_player_id.get(v)?;
-                let raw_client = assoc.player_id_to_client_id.get(player)?;
-                Some(ClientId::from_raw(*raw_client))
-            })
-            .collect()
-    }
-
     /// Checks if any new clients have marked themselves as having started the game,
     /// and marks them as needing a full chunk (and nearby chunks) update.
     pub fn check_new_players(
         mut cmds: Commands,
         msgs: Res<ServerMessages>,
         mut assoc: ResMut<Associations>,
-        mut e_req: ResMut<EntityRequests>,
+        mut syncs: ResMut<GameSyncRequest>,
         mut server: ResMut<RenetServer>,
     ) {
         for msg in msgs.reliable.iter() {
@@ -1164,8 +931,9 @@ pub mod chunk {
                 };
                 server.broadcast_message(DefaultChannel::ReliableUnordered, join_payload);
 
-                e_req.server_id_needing_update.insert(server_id);
+                syncs.client_ids.insert(msg.id);
                 let player_id = msg.id;
+                info!("created obj {server_id} for client {}", msg.id);
                 assoc.create_player(player_id, server_id, msg.id, entity);
             }
         }
@@ -1177,20 +945,20 @@ pub mod chunk {
     pub fn draw_loaded_chunks(
         mut cmds: Commands,
         chunks: Query<(Entity, &ChunkText)>,
-        cm: Res<ChunkManager>,
+        cm: Res<chunk::ChunkManager>,
         assets: Res<AssetServer>,
     ) {
         let border = assets.load("border_1px_white.png");
-        for chunk in cm.chunks.values() {
-            if !chunks.iter().any(|(_, ct)| ct.0 == chunk.pos) {
-                let center = ((chunk.pos.as_vec2() * cm.chunk_size)
-                    + Vec2::new(cm.chunk_size / 2.0, cm.chunk_size / 2.0))
+        for (pos, _) in cm.chunks() {
+            if !chunks.iter().any(|(_, ct)| ct.0 == *pos) {
+                let center = ((pos.as_vec2() * cm.chunk_size())
+                    + Vec2::new(cm.chunk_size() / 2.0, cm.chunk_size() / 2.0))
                 .extend(1.0);
                 cmds.spawn((
-                    ChunkText(chunk.pos),
+                    ChunkText(*pos),
                     Text2dBundle {
                         text: Text::from_section(
-                            format!("x: {}, y: {}", chunk.pos.x, chunk.pos.y),
+                            format!("x: {}, y: {}", pos.x, pos.y),
                             TextStyle::default(),
                         ),
                         transform: Transform::from_translation(center),
@@ -1201,7 +969,7 @@ pub mod chunk {
                     transform: Transform::from_translation(center),
                     texture: border.clone(),
                     sprite: Sprite {
-                        custom_size: Some(Vec2::new(cm.chunk_size, cm.chunk_size)),
+                        custom_size: Some(Vec2::new(cm.chunk_size(), cm.chunk_size())),
                         ..Default::default()
                     },
                     ..Default::default()
@@ -1215,7 +983,7 @@ pub mod chunk {
         }
 
         for (e, chunk) in chunks.iter() {
-            if !cm.chunks.contains_key(&chunk.0) {
+            if !cm.chunks().any(|(pos, _)| pos == &chunk.0) {
                 cmds.entity(e).despawn_recursive();
             }
         }
