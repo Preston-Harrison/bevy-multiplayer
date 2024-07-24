@@ -1,6 +1,5 @@
 use bevy::{
-    prelude::*,
-    utils::{HashMap, HashSet},
+    prelude::*, reflect::Map, utils::{HashMap, HashSet}
 };
 
 #[derive(Debug, Default)]
@@ -49,6 +48,10 @@ impl ChunkManager {
                 .loaded_chunks
                 .try_insert(chunk_pos + dir, Chunk::default());
         }
+    }
+
+    pub fn get_location(&self, server_id: u64) -> Option<&IVec2> {
+        self.locations.get(&server_id)
     }
 
     /// Removes all chunks where outside of observers. Returns entites that have no

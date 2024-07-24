@@ -4,12 +4,13 @@ use bevy::{ecs::schedule::ScheduleLabel, prelude::*, window::PrimaryWindow};
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    anim::{Animation, Animator},
     netcode::{
         input::{Input, InputBuffer, InputMapBuffer},
         read::ClientMessages,
         tick::Tick,
-        ClientInfo, Deterministic, LocalPlayer, NetworkEntityTag, NetworkEntityType, PlayerId,
-        PrespawnBehavior, Prespawned, RUMFromServer, ServerObject,
+        Associations, ClientInfo, Deterministic, Interpolated, LocalPlayer, NetworkEntityTag,
+        NetworkEntityType, PlayerId, PrespawnBehavior, Prespawned, RUMFromServer, ServerObject,
     },
     TICK_TIME,
 };
@@ -162,29 +163,32 @@ fn square(color: Color, size: f32) -> SpriteBundle {
 
 pub fn spawn_player(
     cmds: &mut Commands,
+    asset_server: &AssetServer,
+    texture_atlas_layouts: &mut Assets<TextureAtlasLayout>,
     server_obj: u64,
     player_id: PlayerId,
     transform: Transform,
     is_local: bool,
 ) -> Entity {
+    let texture = asset_server.load("/Users/preston/Documents/gamedev/lightyear/assets/sprout-lands-pack/Characters/Basic Charakter Spritesheet.png");
+    let layout = TextureAtlasLayout::from_grid(Vec2::new(48.0, 48.0), 4, 4, None, None);
+    let texture_atlas_layout = texture_atlas_layouts.add(layout);
+
     let mut builder = cmds.spawn((
         Player { id: player_id },
         ServerObject::from_u64(server_obj),
-        SpriteBundle {
-            sprite: Sprite {
-                color: if is_local {
-                    Color::rgb(0.0, 1.0, 0.0)
-                } else {
-                    Color::rgb(1.0, 0.0, 0.0)
-                },
-                custom_size: Some(Vec2::new(10.0, 10.0)),
-                ..Default::default()
+        SpriteSheetBundle {
+            texture,
+            atlas: TextureAtlas {
+                layout: texture_atlas_layout,
+                index: 0,
             },
             ..Default::default()
         },
+        Animator::new(Animation::new("idle", 12.0, 0, 0, true)),
         NetworkEntityTag::Player,
     ));
-    builder.insert(transform);
+    builder.insert(transform.with_scale(Vec3::splat(5f32)));
 
     if is_local {
         builder.insert(LocalPlayer);
@@ -193,8 +197,64 @@ pub fn spawn_player(
     builder.id()
 }
 
+fn signum(f: f32, t: f32) -> i8 {
+    if f.abs() < t {
+        0
+    } else if f > 0.0 {
+        1
+    } else {
+        -1
+    }
+}
+
+const FPS: f32 = 2.0;
+
+pub fn animate_players(
+    mut players: Query<(&mut Animator, &Transform, Option<&Interpolated<Transform>>)>,
+    i_buf: Res<InputBuffer>,
+) {
+    for (mut animator, transform, interp) in players.iter_mut() {
+        let (x, y) = match interp {
+            Some(interp) => {
+                let diff = (interp.target.translation - transform.translation).truncate();
+                (signum(diff.x, 5.0), signum(diff.y, 5.0))
+            }
+            None => {
+                let Some(input) = i_buf.inputs.get(0) else {
+                    continue;
+                };
+                (input.x, input.y)
+            }
+        };
+
+        let next_anim = match (x, y) {
+            (-1, _) => Some(Animation::new("left", FPS, 10, 11, true)),
+            (1, _) => Some(Animation::new("right", FPS, 14, 15, true)),
+            (_, 1) => Some(Animation::new("up", FPS, 6, 7, true)),
+            (_, -1) => Some(Animation::new("down", FPS, 2, 3, true)),
+            _ => match animator.current().id() {
+                "left" => Some(Animation::new("idle-left", FPS, 8, 8, true)),
+                "right" => Some(Animation::new("idle-left", FPS, 12, 12, true)),
+                "up" => Some(Animation::new("idle-left", FPS, 4, 4, true)),
+                "down" => Some(Animation::new("idle-left", FPS, 0, 0, true)),
+                _ => None,
+            },
+        };
+
+
+        if let Some(next) = next_anim {
+            if next.id() != animator.current().id() {
+                info!("changing to {}", next.id());
+                animator.play(next);
+            }
+        }
+    }
+}
+
 pub fn spawn_network_entities_on_client(
     mut cmds: Commands,
+    asset_server: Res<AssetServer>,
+    mut texture_atlas_layouts: ResMut<Assets<TextureAtlasLayout>>,
     msgs: Res<ClientMessages>,
     c_info: Res<ClientInfo>,
     prespawns: Query<(Entity, &Prespawned, &ServerObject)>,
@@ -208,7 +268,15 @@ pub fn spawn_network_entities_on_client(
                 transform,
             } => {
                 if *id == c_info.id {
-                    spawn_player(&mut cmds, *server_obj, *id, *transform, true);
+                    spawn_player(
+                        &mut cmds,
+                        &asset_server,
+                        &mut texture_atlas_layouts,
+                        *server_obj,
+                        *id,
+                        *transform,
+                        true,
+                    );
                 }
             }
             RUMFromServer::EntitySpawn(spawn) => match &spawn.data {
@@ -219,6 +287,8 @@ pub fn spawn_network_entities_on_client(
                     }
                     spawn_player(
                         &mut cmds,
+                        &asset_server,
+                        &mut texture_atlas_layouts,
                         spawn.server_id,
                         *id,
                         *transform,
@@ -289,13 +359,14 @@ pub fn despawn_disconnected_players_on_client(
 }
 
 pub fn spawn_npc_on_server(mut cmds: Commands) {
+    let server_id = rand::random();
     cmds.spawn((
         NPC {
             target: None,
             timer: Timer::new(Duration::from_secs(5), TimerMode::Once),
         },
         square(Color::BLUE, 10.0),
-        ServerObject::from_u64(rand::random()),
+        ServerObject::from_u64(server_id),
         NetworkEntityTag::NPC,
     ));
 }

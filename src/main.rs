@@ -24,10 +24,11 @@ use std::{
     time::{Duration, SystemTime},
 };
 
+mod anim;
+mod chunk;
 mod game;
 mod netcode;
 mod utils;
-mod chunk;
 
 const TICK_TIME: f64 = 1.0 / 20.0;
 
@@ -45,13 +46,17 @@ pub enum ClientState {
 
 fn client(server_addr: SocketAddr, socket: UdpSocket, client_id: u64) {
     let mut app = App::new();
-    app.add_plugins(DefaultPlugins.set(WindowPlugin {
-        primary_window: Some(Window {
-            title: format!("client {}", client_id),
-            ..Default::default()
-        }),
-        ..Default::default()
-    }));
+    app.add_plugins(
+        DefaultPlugins
+            .set(WindowPlugin {
+                primary_window: Some(Window {
+                    title: format!("client {}", client_id),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })
+            .set(ImagePlugin::default_nearest()),
+    );
 
     app.add_plugins(RenetClientPlugin);
 
@@ -98,8 +103,10 @@ fn client(server_addr: SocketAddr, socket: UdpSocket, client_id: u64) {
     app.add_systems(
         Update,
         (
+            anim::play_animations,
             netcode::interpolate::<Transform>,
             game::set_cursor_location_on_client,
+            game::animate_players,
         )
             .run_if(in_state(ClientState::InGame)),
     );
@@ -133,13 +140,17 @@ fn client(server_addr: SocketAddr, socket: UdpSocket, client_id: u64) {
 
 fn server(server_addr: SocketAddr, latency: u64) {
     let mut app = App::new();
-    app.add_plugins(DefaultPlugins.set(WindowPlugin {
-        primary_window: Some(Window {
-            title: "server".to_string(),
-            ..Default::default()
-        }),
-        ..Default::default()
-    }));
+    app.add_plugins(
+        DefaultPlugins
+            .set(WindowPlugin {
+                primary_window: Some(Window {
+                    title: "server".to_string(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })
+            .set(ImagePlugin::default_nearest()),
+    );
     app.add_plugins(RenetServerPlugin);
 
     let server = RenetServer::new(ConnectionConfig::default());
@@ -194,10 +205,9 @@ fn server(server_addr: SocketAddr, latency: u64) {
             netcode::chunk::update_chunk_members,
             netcode::chunk::draw_loaded_chunks,
             netcode::send_transform_update,
-            // netcode::send_bullet_update,
             netcode::tick::increment_tick_on_server,
             netcode::conn::handle_client_connect_and_disconnect,
-            // netcode::conn::send_join_messages_on_server,
+            netcode::associate_server_objs,
             netcode::chunk::broadcast_entity_spawns,
             netcode::cleanup_deleted_server_objs,
         )

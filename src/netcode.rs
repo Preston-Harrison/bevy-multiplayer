@@ -61,6 +61,21 @@ impl Associations {
         let entity = self.server_id_to_entity.get(server_id)?;
         Some((*entity, *server_id, *player_id))
     }
+
+    pub fn spawn_entity(&mut self, entity: Entity, server_id: u64) {
+        self.server_id_to_entity.insert(server_id, entity);
+        self.entity_to_server_id.insert(entity, server_id);
+    }
+}
+
+pub fn associate_server_objs(
+    mut assoc: ResMut<Associations>,
+    objs: Query<(Entity, &ServerObject), Added<ServerObject>>,
+) {
+    for (e, obj) in objs.iter() {
+        info!("assoc {e:?} with {}", obj.as_u64());
+        assoc.spawn_entity(e, obj.as_u64());
+    }
 }
 
 pub fn cleanup_deleted_server_objs(
@@ -69,7 +84,6 @@ pub fn cleanup_deleted_server_objs(
     mut reader: RemovedComponents<ServerObject>,
 ) {
     for entity in reader.read() {
-
         let Some(server_id) = assoc.entity_to_server_id.remove(&entity) else {
             warn!("tried to clean up entity with no server id");
             continue;
@@ -122,6 +136,7 @@ pub enum PrespawnBehavior {
     Replace,
 }
 
+/// Stops the client from applying updates from the server to this component.
 #[derive(Component, Default)]
 pub struct Deterministic<T: Component> {
     data: PhantomData<T>,
@@ -768,6 +783,9 @@ pub mod chunk {
         for (_, t, obj) in objs.iter() {
             let chunk_pos = chunk::transform_to_chunk_pos(chunk_size, *t);
             cm.load_chunks_near(chunk_pos);
+            if cm.get_location(obj.as_u64()).is_none() {
+                info!("adding server obj {} to chunks", obj.as_u64());
+            }
             cm.set_chunk_location(obj.as_u64(), chunk_pos);
         }
 
@@ -837,7 +855,11 @@ pub mod chunk {
                     if spawn == *server_id {
                         continue;
                     }
-                    let entity = assoc.server_id_to_entity.get(&spawn).unwrap();
+                    let entity = assoc
+                        .server_id_to_entity
+                        .get(&spawn)
+                        .ok_or(format!("could not find entity for {}", spawn))
+                        .unwrap();
                     let Some(e_ref) = world.get_entity(*entity) else {
                         // Entity despawned.
                         continue;
@@ -918,12 +940,21 @@ pub mod chunk {
         mut assoc: ResMut<Associations>,
         mut syncs: ResMut<GameSyncRequest>,
         mut server: ResMut<RenetServer>,
+        asset_server: Res<AssetServer>,
+        mut texture_atlas_layouts: ResMut<Assets<TextureAtlasLayout>>,
     ) {
         for msg in msgs.reliable.iter() {
             if let RUMFromClient::StartedGame = msg.msg {
                 let server_id = rand::random();
-                let entity =
-                    game::spawn_player(&mut cmds, server_id, msg.id, Transform::default(), false);
+                let entity = game::spawn_player(
+                    &mut cmds,
+                    &asset_server,
+                    &mut texture_atlas_layouts,
+                    server_id,
+                    msg.id,
+                    Transform::default(),
+                    false,
+                );
                 let join_payload = RUMFromServer::PlayerJoined {
                     server_obj: server_id,
                     id: msg.id,
