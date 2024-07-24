@@ -1,1 +1,15 @@
-TODO: tick negotiation
+# Bevy Multiplayer Example
+Run the server with: `cargo run -- --server`
+Run the client with: `cargo run -- --client --id <INTGER>`
+
+## Completed Tasks:
+- Game sync
+- Input buffering
+- Rollback
+- Distributred entity spawn
+- Join/leave syncing
+- Chunking
+
+## In progress
+- Tick negotiation
+- Animations
