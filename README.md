@@ -1,5 +1,5 @@
 # Bevy Multiplayer Example
-Run the server with: `cargo run -- --server`
+Run the server with: `cargo run -- --server`  
 Run the client with: `cargo run -- --client --id <INTGER>`
 
 ## Completed Tasks:
