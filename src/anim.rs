@@ -26,6 +26,8 @@ impl Animation {
         self.id
     }
 
+    /// Not currently used, but probably is useful.
+    #[allow(unused)]
     fn reset(&mut self) {
         self.frame = self.start_ix;
         self.timer.reset();
@@ -71,36 +73,5 @@ pub fn play_animations(mut anims: Query<(&mut Animator, &mut TextureAtlas)>, tim
         }
 
         texture.index = animator.current.frame;
-    }
-}
-
-pub mod graph {
-    use bevy::{ecs::schedule::{BoxedCondition, Condition}, utils::HashMap};
-
-    use super::Animation;
-
-    pub struct Graph {
-        nodes: HashMap<&'static str, Animation>,
-    }
-
-    pub struct Transition<M> {
-        condition: BoxedCondition<M>
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_get_next_frame() {
-        let mut anim = Animation::new("test", 10.0, 0, 3, true);
-        assert_eq!(anim.get_next_frame(), 1);
-        anim.frame = 1;
-        assert_eq!(anim.get_next_frame(), 2);
-        anim.frame = 2;
-        assert_eq!(anim.get_next_frame(), 3);
-        anim.frame = 3;
-        assert_eq!(anim.get_next_frame(), 0);
     }
 }

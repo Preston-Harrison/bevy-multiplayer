@@ -1,4 +1,4 @@
-use std::marker::PhantomData;
+use std::{marker::PhantomData, time::Duration};
 
 use bevy::{prelude::*, utils::HashMap};
 use bevy_renet::renet::{DefaultChannel, RenetServer};
@@ -11,6 +11,9 @@ use crate::{
 };
 
 use self::{input::InputBuffer, read::ClientMessages, tick::Tick};
+
+/// The client should always be a few ticks ahead, even including network delay.
+const CLIENT_TICKS_AHEAD: u64 = 5;
 
 pub type PlayerId = u64;
 
@@ -35,7 +38,7 @@ pub struct Associations {
     entity_to_server_id: HashMap<Entity, u64>,
 }
 
-/// TODO: assertions
+/// TODO: assertions and tests to ensure these relationships actually hold.
 impl Associations {
     pub fn create_player(
         &mut self,
@@ -222,19 +225,30 @@ pub enum RUMFromServer {
     EntityDespawn {
         server_id: u64,
     },
+    // Change the client tick by a certain number of ticks.
     AdjustTick(i8),
-    BroadcastTick(u64),
+    BroadcastTick {
+        current_tick: u64,
+        unix_timestamp: Duration,
+    },
 }
 impl_bytes!(RUMFromServer);
 
+/// Reliable unordered message from the client.
 #[derive(Serialize, Deserialize, Clone)]
 pub enum RUMFromClient {
-    BroadcastTick(u64),
+    /// Client sends their tick and client timestamp periodically so the server
+    /// can send adjustments.
+    BroadcastTick {
+        current_tick: u64,
+        unix_timestamp: Duration,
+    },
     /// Client sends this when it is in the game and ready to receive game updates.
     StartedGame,
 }
 impl_bytes!(RUMFromClient);
 
+/// Reliable unordered message from the client with a client ID.
 #[derive(Clone)]
 pub struct RUMFromClientWithId {
     id: u64,
@@ -456,9 +470,11 @@ pub mod tick {
     use bevy::prelude::*;
     use bevy_renet::renet::{ClientId, DefaultChannel, RenetClient, RenetServer};
 
+    use crate::{current_time, ticks_since};
+
     use super::{
         read::{ClientMessages, ServerMessages},
-        RUMFromClient, RUMFromServer,
+        RUMFromClient, RUMFromServer, CLIENT_TICKS_AHEAD,
     };
 
     #[derive(Resource, Default)]
@@ -483,9 +499,13 @@ pub mod tick {
 
     pub fn initialize_tick_on_client(mut cmds: Commands, msgs: Res<ClientMessages>) {
         for msg in msgs.reliable.iter() {
-            if let RUMFromServer::BroadcastTick(tick) = msg {
+            if let RUMFromServer::BroadcastTick {
+                current_tick,
+                unix_timestamp,
+            } = msg
+            {
                 cmds.insert_resource(Tick {
-                    current: *tick + 5,
+                    current: current_tick + ticks_since(*unix_timestamp) + CLIENT_TICKS_AHEAD,
                     adjust: 0,
                 });
             }
@@ -522,7 +542,10 @@ pub mod tick {
         if timer.timer.just_finished() {
             client.send_message(
                 DefaultChannel::ReliableUnordered,
-                RUMFromClient::BroadcastTick(tick.current),
+                RUMFromClient::BroadcastTick {
+                    current_tick: tick.current,
+                    unix_timestamp: current_time(),
+                },
             );
         }
     }
@@ -535,17 +558,36 @@ pub mod tick {
         mut server: ResMut<RenetServer>,
     ) {
         for msg in msgs.reliable.iter() {
-            if let RUMFromClient::BroadcastTick(client_tick) = msg.msg {
-                // TODO: check for overflows
-                let diff = (tick.current as i64 - client_tick as i64) as i8;
-                // Client should be 2 ticks ahead.
-                let adjustment = diff + 2;
+            if let RUMFromClient::BroadcastTick {
+                current_tick,
+                unix_timestamp,
+            } = msg.msg
+            {
+                if current_time() < unix_timestamp {
+                    warn!("client is in the future");
+                    continue;
+                }
+                if tick.current < current_tick {
+                    info!("client has fallen behind");
+                    server.send_message(
+                        ClientId::from_raw(msg.id),
+                        DefaultChannel::ReliableUnordered,
+                        RUMFromServer::BroadcastTick {
+                            current_tick: tick.current,
+                            unix_timestamp: current_time(),
+                        },
+                    );
+                    continue;
+                }
+
+                let diff = tick.current - current_tick;
+                let adjustment = diff + ticks_since(unix_timestamp) + CLIENT_TICKS_AHEAD;
                 if adjustment != 0 {
                     info!("sending adjustment tick");
                     server.send_message(
                         ClientId::from_raw(msg.id),
                         DefaultChannel::ReliableUnordered,
-                        RUMFromServer::AdjustTick(adjustment),
+                        RUMFromServer::AdjustTick(adjustment as i8),
                     );
                 }
             }
@@ -704,7 +746,7 @@ pub mod conn {
     };
     use bevy_renet::renet::{DefaultChannel, RenetServer, ServerEvent};
 
-    use crate::netcode::RUMFromServer;
+    use crate::{current_time, netcode::RUMFromServer};
 
     use super::{tick::Tick, Associations};
 
@@ -717,7 +759,8 @@ pub mod conn {
         assoc: Res<Associations>,
         tick: Res<Tick>,
     ) {
-        // TODO: broadcast player join/leave events.
+        // TODO: broadcast player join events so they can gracefully spawn in
+        // instead of just appearing.
         for event in server_events.read() {
             match event {
                 ServerEvent::ClientConnected { client_id } => {
@@ -725,7 +768,10 @@ pub mod conn {
                     server.send_message(
                         *client_id,
                         DefaultChannel::ReliableUnordered,
-                        RUMFromServer::BroadcastTick(tick.current),
+                        RUMFromServer::BroadcastTick {
+                            current_tick: tick.current,
+                            unix_timestamp: current_time(),
+                        },
                     );
                 }
                 ServerEvent::ClientDisconnected { client_id, reason } => {
@@ -808,6 +854,7 @@ pub mod chunk {
             };
         }
 
+        // Debug print chunks when P is pressed.
         for k in key.read() {
             if k.key_code == KeyCode::KeyP && k.state == ButtonState::Pressed {
                 dbg!(&cm);

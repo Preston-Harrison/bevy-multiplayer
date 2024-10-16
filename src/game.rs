@@ -9,8 +9,8 @@ use crate::{
         input::{Input, InputBuffer, InputMapBuffer},
         read::ClientMessages,
         tick::Tick,
-        Associations, ClientInfo, Deterministic, Interpolated, LocalPlayer, NetworkEntityTag,
-        NetworkEntityType, PlayerId, PrespawnBehavior, Prespawned, RUMFromServer, ServerObject,
+        ClientInfo, Deterministic, Interpolated, LocalPlayer, NetworkEntityTag, NetworkEntityType,
+        PlayerId, PrespawnBehavior, Prespawned, RUMFromServer, ServerObject,
     },
     TICK_TIME,
 };
@@ -170,7 +170,7 @@ pub fn spawn_player(
     transform: Transform,
     is_local: bool,
 ) -> Entity {
-    let texture = asset_server.load("/Users/preston/Documents/gamedev/lightyear/assets/sprout-lands-pack/Characters/Basic Charakter Spritesheet.png");
+    let texture = asset_server.load("sprout-lands-pack/Characters/Basic Charakter Spritesheet.png");
     let layout = TextureAtlasLayout::from_grid(Vec2::new(48.0, 48.0), 4, 4, None, None);
     let texture_atlas_layout = texture_atlas_layouts.add(layout);
 
@@ -188,7 +188,11 @@ pub fn spawn_player(
         Animator::new(Animation::new("idle", 12.0, 0, 0, true)),
         NetworkEntityTag::Player,
     ));
-    builder.insert(transform.with_scale(Vec3::splat(5f32)));
+    builder.insert(
+        transform
+            .with_scale(Vec3::splat(5f32))
+            .with_scale(Vec3::splat(1.0)),
+    );
 
     if is_local {
         builder.insert(LocalPlayer);
@@ -240,7 +244,6 @@ pub fn animate_players(
                 _ => None,
             },
         };
-
 
         if let Some(next) = next_anim {
             if next.id() != animator.current().id() {
@@ -304,7 +307,7 @@ pub fn spawn_network_entities_on_client(
                     e.insert(TransformBundle::from_transform(*transform));
                 }
                 NetworkEntityType::Bullet { bullet, transform } => {
-                    // TODO: refactor
+                    // TODO: refactor into a seperate reusable function.
                     let mut should_spawn = true;
                     for (entity, prespawn, server_obj) in prespawns.iter() {
                         if server_obj.as_u64() == spawn.server_id {

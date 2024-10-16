@@ -38,6 +38,11 @@ fn current_time() -> Duration {
         .unwrap()
 }
 
+fn ticks_since(time: Duration) -> u64 {
+    assert!(time < current_time());
+    ((current_time() - time).as_secs_f64() / TICK_TIME) as u64
+}
+
 #[derive(States, Clone, Eq, PartialEq, Hash, Debug)]
 pub enum ClientState {
     Connecting,

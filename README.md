@@ -9,7 +9,7 @@ Run the client with: `cargo run -- --client --id <INTGER>`
 - Distributred entity spawn
 - Join/leave syncing
 - Chunking
+- Tick negotiation
 
 ## In progress
-- Tick negotiation
 - Animations
