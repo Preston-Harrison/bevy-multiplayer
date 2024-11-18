@@ -11,7 +11,7 @@ use bevy_renet::RenetClientPlugin;
 use std::net::UdpSocket;
 use std::time::SystemTime;
 
-use crate::shared;
+use crate::{message, shared};
 
 pub fn run() {
     App::new()
@@ -25,7 +25,9 @@ pub fn run() {
                 spawn_text,
             ),
         )
-        .add_systems(Update, (move_player, change_fov, handle_client_events))
+        .add_systems(Update, (move_player, change_fov))
+        .add_plugins(shared::Game)
+        .add_plugins(message::client::ClientMessagePlugin)
         .run();
 }
 
@@ -52,12 +54,6 @@ impl Plugin for Client {
             .unwrap();
         let transport = NetcodeClientTransport::new(current_time, authentication, socket).unwrap();
         app.insert_resource(transport);
-    }
-}
-
-fn handle_client_events(mut client: ResMut<RenetClient>) {
-    while let Some(message) = client.receive_message(0) {
-        println!("Received message: {:?}", String::from_utf8_lossy(&message));
     }
 }
 

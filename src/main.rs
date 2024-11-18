@@ -1,9 +1,9 @@
 use std::env;
 
 mod client;
+mod message;
 mod server;
 mod shared;
-mod message;
 
 fn main() {
     let mut args = env::args();

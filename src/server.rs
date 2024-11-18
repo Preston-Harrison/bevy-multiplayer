@@ -17,7 +17,7 @@ pub fn run() {
         .add_plugins((DefaultPlugins, Server))
         .add_systems(Startup, setup)
         .add_systems(Update, handle_server_events)
-        .add_systems(Update, server_broadcast)
+        .add_plugins(shared::Game)
         .run();
 }
 
@@ -61,12 +61,5 @@ fn handle_server_events(mut server: EventReader<ServerEvent>) {
                 println!("Client {} disconnected: {:?}", client_id, reason);
             }
         }
-    }
-}
-
-fn server_broadcast(mut server: ResMut<RenetServer>) {
-    for client_id in server.clients_id() {
-        let message = b"Hello from the server!";
-        server.send_message(client_id, 0, message.to_vec());
     }
 }
