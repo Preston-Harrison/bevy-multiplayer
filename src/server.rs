@@ -14,7 +14,7 @@ use crate::{
     message::{
         self,
         client::ReliableMessageFromClient,
-        server::{MessageReader, ReliableMessageFromServer},
+        server::{MessageReaderOnServer, ReliableMessageFromServer},
         spawn::NetworkSpawn,
     },
     shared::{
@@ -105,7 +105,7 @@ fn handle_server_events(
 
 fn handle_ready_game(
     mut server: ResMut<RenetServer>,
-    reader: Res<MessageReader>,
+    reader: Res<MessageReaderOnServer>,
     ball_query: Query<(&NetworkObject, &Transform), With<Ball>>,
     player_query: Query<(&NetworkObject, &Transform), With<Player>>,
     mut client_map: ResMut<ClientNetworkObjectMap>,

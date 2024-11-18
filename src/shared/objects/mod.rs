@@ -1,5 +1,5 @@
 use crate::message::{
-    client::MessageReader,
+    client::MessageReaderOnClient,
     server::{ReliableMessageFromServer, UnreliableMessageFromServer},
     spawn::NetworkSpawn,
 };
@@ -61,7 +61,7 @@ fn spawn_balls(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    reader: Res<MessageReader>,
+    reader: Res<MessageReaderOnClient>,
 ) {
     for msg in reader.reliable_messages() {
         let ReliableMessageFromServer::Spawn(network_obj, network_spawn) = msg else {
@@ -93,7 +93,7 @@ fn broadcast_ball_data(
 }
 
 fn recv_ball_data(
-    reader: Res<MessageReader>,
+    reader: Res<MessageReaderOnClient>,
     mut query: Query<(&mut Transform, &NetworkObject), With<Ball>>,
 ) {
     for msg in reader.unreliable_messages() {

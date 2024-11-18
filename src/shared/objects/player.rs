@@ -1,12 +1,12 @@
 use std::collections::VecDeque;
 
-use bevy::{prelude::*, utils::HashMap};
+use bevy::{input::mouse::MouseMotion, prelude::*, utils::HashMap};
 use bevy_renet::renet::{DefaultChannel, RenetClient, RenetServer};
 use serde::{Deserialize, Serialize};
 
 use crate::{
     message::{
-        client::{MessageReader, UnreliableMessageFromClient},
+        client::{MessageReaderOnClient, UnreliableMessageFromClient},
         server::{self, ReliableMessageFromServer, UnreliableMessageFromServer},
         spawn::NetworkSpawn,
     },
@@ -44,34 +44,21 @@ impl Plugin for PlayerPlugin {
         app.insert_resource(InputBuffer::default());
         app.add_systems(
             Update,
-            broadcast_player_spawns
-                .in_set(ServerOnly)
-                .in_set(GameLogic::Sync),
-        );
-        app.add_systems(
-            Update,
-            spawn_players.in_set(ClientOnly).in_set(GameLogic::Spawn),
-        );
-        app.add_systems(Update, broadcast_player_data.in_set(ServerOnly));
-        app.add_systems(
-            Update,
-            recv_player_data.in_set(ClientOnly).in_set(GameLogic::Sync),
-        );
-        app.add_systems(
-            Update,
-            read_input.in_set(ClientOnly).in_set(GameLogic::Read),
-        );
-        app.add_systems(
-            Update,
-            apply_inputs.in_set(ServerOnly).in_set(GameLogic::Game),
-        );
-        app.add_systems(
-            Update,
-            clear_inputs.in_set(ServerOnly).in_set(GameLogic::Clear),
-        );
-        app.add_systems(
-            Update,
-            read_inputs.in_set(ServerOnly).in_set(GameLogic::Input),
+            (
+                spawn_players.in_set(ClientOnly).in_set(GameLogic::Spawn),
+                recv_player_data.in_set(ClientOnly).in_set(GameLogic::Sync),
+                read_input.in_set(ClientOnly).in_set(GameLogic::Read),
+                apply_inputs.in_set(ServerOnly).in_set(GameLogic::Game),
+                clear_inputs.in_set(ServerOnly).in_set(GameLogic::Clear),
+                read_inputs.in_set(ServerOnly).in_set(GameLogic::Input),
+                broadcast_player_data
+                    .in_set(ServerOnly)
+                    .in_set(GameLogic::Sync),
+                broadcast_player_spawns
+                    .in_set(ServerOnly)
+                    .in_set(GameLogic::Sync),
+                rotate_player.in_set(ClientOnly),
+            ),
         );
     }
 }
@@ -93,7 +80,7 @@ fn spawn_players(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    reader: Res<MessageReader>,
+    reader: Res<MessageReaderOnClient>,
     local_player: Res<LocalPlayer>,
 ) {
     for msg in reader.reliable_messages() {
@@ -130,7 +117,7 @@ fn broadcast_player_data(
 }
 
 fn recv_player_data(
-    reader: Res<MessageReader>,
+    reader: Res<MessageReaderOnClient>,
     mut query: Query<(&mut Transform, &NetworkObject), With<Player>>,
 ) {
     for msg in reader.unreliable_messages() {
@@ -208,7 +195,7 @@ fn read_input(
 
 fn read_inputs(
     mut inputs: ResMut<ClientInputs>,
-    reader: Res<server::MessageReader>,
+    reader: Res<server::MessageReaderOnServer>,
     client_netmap: Res<ClientNetworkObjectMap>,
 ) {
     for (client_id, msg) in reader.unreliable_messages() {
@@ -235,4 +222,20 @@ fn apply_inputs(
 
 fn clear_inputs(mut inputs: ResMut<ClientInputs>) {
     inputs.0.clear();
+}
+
+fn rotate_player(
+    mut mouse_motion: EventReader<MouseMotion>,
+    mut player: Query<&mut Transform, With<LocalPlayerTag>>,
+) {
+    let Ok(mut transform) = player.get_single_mut() else {
+        return;
+    };
+    for motion in mouse_motion.read() {
+        let yaw = -motion.delta.x * 0.003;
+        let pitch = -motion.delta.y * 0.002;
+        // Order of rotations is important, see <https://gamedev.stackexchange.com/a/136175/103059>
+        transform.rotate_y(yaw);
+        transform.rotate_local_x(pitch);
+    }
 }

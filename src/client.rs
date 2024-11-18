@@ -1,4 +1,3 @@
-use bevy::input::mouse::MouseMotion;
 use bevy::prelude::*;
 use bevy_renet::renet::transport::{ClientAuthentication, NetcodeClientTransport};
 use bevy_renet::renet::{ConnectionConfig, DefaultChannel, RenetClient};
@@ -8,27 +7,43 @@ use bevy_renet::RenetClientPlugin;
 use std::net::UdpSocket;
 use std::time::SystemTime;
 
-use crate::message::client::{MessageReader, ReliableMessageFromClient};
+use crate::message::client::{MessageReaderOnClient, ReliableMessageFromClient};
 use crate::message::server::ReliableMessageFromServer;
-use crate::shared::objects::player::{LocalPlayer, LocalPlayerTag, Player};
+use crate::message::MessagesAvailable;
+use crate::shared::objects::player::{LocalPlayer, Player};
 use crate::shared::objects::NetworkObject;
-use crate::shared::{AppState, GameLogic};
+use crate::shared::AppState;
 use crate::{message, shared};
+
+#[derive(States, Debug, Clone, PartialEq, Eq, Hash)]
+enum LoadState {
+    Init,
+    Connecting,
+    LocalLoaded,
+    RemoteLoading,
+    WaitingForPlayerSpawn,
+    Done,
+}
 
 pub fn run() {
     App::new()
         .add_plugins((DefaultPlugins, Client))
-        .add_systems(Startup, (spawn_text, spawn_connect_button))
+        .insert_state(LoadState::Init)
+        .add_systems(Startup, spawn_connect_button)
+        .add_systems(
+            Update,
+            spawn_view_model.run_if(in_state(LoadState::WaitingForPlayerSpawn)),
+        )
+        .add_systems(OnEnter(LoadState::Connecting), load_local)
         .add_systems(
             Update,
             (
-                (move_player, handle_connect_button, spawn_view_model),
-                (send_ready, load_local, set_local_player)
-                    .before(GameLogic::Clear)
-                    .after(GameLogic::Read),
-            ),
+                handle_connect_button.run_if(in_state(LoadState::Init)),
+                send_ready.run_if(in_state(LoadState::LocalLoaded)),
+                set_local_player.run_if(in_state(LoadState::RemoteLoading)),
+            )
+                .in_set(MessagesAvailable),
         )
-        .insert_resource(LoadState::None)
         .insert_state(shared::AppState::MainMenu)
         .add_plugins(shared::Game)
         .add_plugins(message::client::ClientMessagePlugin)
@@ -51,12 +66,9 @@ fn spawn_view_model(
     mut commands: Commands,
     players: Query<(Entity, &NetworkObject), Added<Player>>,
     cameras: Query<Entity, With<UICamera>>,
-    local_player: Option<Res<LocalPlayer>>,
+    local_player: Res<LocalPlayer>,
+    mut load_state: ResMut<NextState<LoadState>>,
 ) {
-    let Some(local_player) = local_player else {
-        return;
-    };
-
     let mut entity = None;
     for (e, net_obj) in players.iter() {
         if *net_obj == local_player.0 {
@@ -67,6 +79,7 @@ fn spawn_view_model(
     let Some(entity) = entity else {
         return;
     };
+    load_state.set(LoadState::Done);
 
     for camera in cameras.iter() {
         commands.entity(camera).despawn_recursive();
@@ -86,48 +99,6 @@ fn spawn_view_model(
             },
         ));
     });
-}
-
-fn spawn_text(mut commands: Commands) {
-    commands
-        .spawn(NodeBundle {
-            style: Style {
-                position_type: PositionType::Absolute,
-                bottom: Val::Px(12.0),
-                left: Val::Px(12.0),
-                ..default()
-            },
-            ..default()
-        })
-        .with_children(|parent| {
-            parent.spawn(TextBundle::from_section(
-                concat!(
-                    "Move the camera with your mouse.\n",
-                    "Press arrow up to decrease the FOV of the world model.\n",
-                    "Press arrow down to increase the FOV of the world model."
-                ),
-                TextStyle {
-                    font_size: 25.0,
-                    ..default()
-                },
-            ));
-        });
-}
-
-fn move_player(
-    mut mouse_motion: EventReader<MouseMotion>,
-    mut player: Query<&mut Transform, With<LocalPlayerTag>>,
-) {
-    let Ok(mut transform) = player.get_single_mut() else {
-        return;
-    };
-    for motion in mouse_motion.read() {
-        let yaw = -motion.delta.x * 0.003;
-        let pitch = -motion.delta.y * 0.002;
-        // Order of rotations is important, see <https://gamedev.stackexchange.com/a/136175/103059>
-        transform.rotate_y(yaw);
-        transform.rotate_local_x(pitch);
-    }
 }
 
 #[derive(Component)]
@@ -181,29 +152,16 @@ fn spawn_connect_button(mut commands: Commands) {
         });
 }
 
-#[derive(Resource, PartialEq)]
-enum LoadState {
-    None,
-    Connecting,
-    LocalLoaded,
-    RemoteLoading,
-    Done,
-}
-
 fn handle_connect_button(
     mut commands: Commands,
     button: Query<&Interaction, (Changed<Interaction>, With<Button>)>,
     parent: Query<Entity, With<ConnectButton>>,
-    mut load_state: ResMut<LoadState>,
+    mut load_state: ResMut<NextState<LoadState>>,
 ) {
-    if *load_state != LoadState::None {
-        return;
-    }
     for interaction in button.iter() {
         match *interaction {
             Interaction::Pressed => {
-                println!("clicked");
-                *load_state = LoadState::Connecting;
+                load_state.set(LoadState::Connecting);
                 commands.entity(parent.single()).despawn_recursive();
 
                 let client = RenetClient::new(ConnectionConfig::default());
@@ -230,35 +188,34 @@ fn handle_connect_button(
 }
 
 fn load_local(world: &mut World) {
-    world.resource_scope(|world: &mut World, mut load_state: Mut<LoadState>| {
-        if *load_state != LoadState::Connecting {
-            return;
-        }
-        shared::scenes::setup_scene_1(world);
-        *load_state = LoadState::LocalLoaded;
-        println!("loaded local");
-    })
+    world.resource_scope(
+        |world: &mut World, mut load_state: Mut<NextState<LoadState>>| {
+            shared::scenes::setup_scene_1(world);
+            load_state.set(LoadState::LocalLoaded);
+            println!("loaded local");
+        },
+    )
 }
 
-fn send_ready(mut load_state: ResMut<LoadState>, client: Option<ResMut<RenetClient>>) {
+fn send_ready(mut load_state: ResMut<NextState<LoadState>>, client: Option<ResMut<RenetClient>>) {
     let Some(mut client) = client else {
         return;
     };
-    if *load_state == LoadState::LocalLoaded && client.is_connected() {
+    if client.is_connected() {
         let message = ReliableMessageFromClient::Connected;
         println!("connected");
         let bytes = bincode::serialize(&message).unwrap();
         client.send_message(DefaultChannel::ReliableUnordered, bytes);
-        *load_state = LoadState::RemoteLoading;
+        load_state.set(LoadState::RemoteLoading);
     }
 }
 
 fn set_local_player(
     mut commands: Commands,
-    reader: Res<MessageReader>,
+    reader: Res<MessageReaderOnClient>,
     client: Option<ResMut<RenetClient>>,
     mut app_state: ResMut<NextState<AppState>>,
-    mut load_state: ResMut<LoadState>,
+    mut load_state: ResMut<NextState<LoadState>>,
 ) {
     let Some(mut client) = client else {
         return;
@@ -271,7 +228,7 @@ fn set_local_player(
             let bytes = bincode::serialize(&message).unwrap();
             client.send_message(DefaultChannel::ReliableUnordered, bytes);
             app_state.set(AppState::InGame);
-            *load_state = LoadState::Done;
+            load_state.set(LoadState::WaitingForPlayerSpawn);
         }
     }
 }

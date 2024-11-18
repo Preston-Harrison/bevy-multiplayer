@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use bevy_renet::renet::{DefaultChannel, RenetServer};
 use rand::Rng;
 
-use crate::message::{client::MessageReader, server::ReliableMessageFromServer};
+use crate::message::{client::MessageReaderOnClient, server::ReliableMessageFromServer};
 
 use self::{
     cond::{run_if_is_client, run_if_is_server},
@@ -42,7 +42,7 @@ pub struct ClientOnly;
 pub struct ServerOnly;
 
 fn despawn(
-    reader: Res<MessageReader>,
+    reader: Res<MessageReaderOnClient>,
     mut commands: Commands,
     query: Query<(Entity, &NetworkObject)>,
 ) {

@@ -1,18 +1,32 @@
+use bevy::prelude::*;
+
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub enum MessageSet {
+    Read,
+    Clear,
+}
+
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct MessagesAvailable;
+
 pub mod client {
     use crate::shared::{objects::player, GameLogic};
 
-    use super::server::{ReliableMessageFromServer, UnreliableMessageFromServer};
+    use super::{
+        server::{ReliableMessageFromServer, UnreliableMessageFromServer},
+        MessageSet, MessagesAvailable,
+    };
     use bevy::prelude::*;
     use bevy_renet::renet::{DefaultChannel, RenetClient};
     use serde::{Deserialize, Serialize};
 
     #[derive(Resource)]
-    pub struct MessageReader {
+    pub struct MessageReaderOnClient {
         reliable_messages: Vec<ReliableMessageFromServer>,
         unreliable_messages: Vec<UnreliableMessageFromServer>,
     }
 
-    impl MessageReader {
+    impl MessageReaderOnClient {
         pub fn new() -> Self {
             Self {
                 reliable_messages: Vec::new(),
@@ -33,15 +47,25 @@ pub mod client {
 
     impl Plugin for ClientMessagePlugin {
         fn build(&self, app: &mut App) {
-            app.insert_resource(MessageReader::new())
-                .add_systems(Update, read_messages_from_server.before(GameLogic::Read))
-                .add_systems(Update, clear_messages.after(GameLogic::Clear));
+            app.insert_resource(MessageReaderOnClient::new())
+                .add_systems(Update, read_messages_from_server.in_set(MessageSet::Read))
+                .add_systems(Update, clear_messages.in_set(MessageSet::Clear));
+            app.configure_sets(
+                Update,
+                (
+                    MessageSet::Read.before(GameLogic::Read),
+                    MessageSet::Clear.after(GameLogic::Clear),
+                    MessagesAvailable
+                        .after(MessageSet::Read)
+                        .before(MessageSet::Clear),
+                ),
+            );
         }
     }
 
     fn read_messages_from_server(
         client: Option<ResMut<RenetClient>>,
-        mut message_reader: ResMut<MessageReader>,
+        mut message_reader: ResMut<MessageReaderOnClient>,
     ) {
         let Some(mut client) = client else {
             return;
@@ -66,7 +90,7 @@ pub mod client {
         }
     }
 
-    fn clear_messages(mut message_reader: ResMut<MessageReader>) {
+    fn clear_messages(mut message_reader: ResMut<MessageReaderOnClient>) {
         message_reader.reliable_messages.clear();
         message_reader.unreliable_messages.clear();
     }
@@ -93,6 +117,7 @@ pub mod server {
     use super::{
         client::{ReliableMessageFromClient, UnreliableMessageFromClient},
         spawn::NetworkSpawn,
+        MessageSet, MessagesAvailable,
     };
 
     #[derive(Serialize, Deserialize, Debug)]
@@ -109,12 +134,12 @@ pub mod server {
     }
 
     #[derive(Resource)]
-    pub struct MessageReader {
+    pub struct MessageReaderOnServer {
         reliable_messages: Vec<(ClientId, ReliableMessageFromClient)>,
         unreliable_messages: Vec<(ClientId, UnreliableMessageFromClient)>,
     }
 
-    impl MessageReader {
+    impl MessageReaderOnServer {
         pub fn new() -> Self {
             Self {
                 reliable_messages: Vec::new(),
@@ -135,15 +160,25 @@ pub mod server {
 
     impl Plugin for ServerMessagePlugin {
         fn build(&self, app: &mut App) {
-            app.insert_resource(MessageReader::new())
-                .add_systems(Update, read_messages_from_clients.before(GameLogic::Read))
-                .add_systems(Update, clear_messages.after(GameLogic::Clear));
+            app.insert_resource(MessageReaderOnServer::new())
+                .add_systems(Update, read_messages_from_clients.in_set(MessageSet::Read))
+                .add_systems(Update, clear_messages.after(MessageSet::Clear));
+            app.configure_sets(
+                Update,
+                (
+                    MessageSet::Read.before(GameLogic::Read),
+                    MessageSet::Clear.after(GameLogic::Clear),
+                    MessagesAvailable
+                        .after(MessageSet::Read)
+                        .before(MessageSet::Clear),
+                ),
+            );
         }
     }
 
     fn read_messages_from_clients(
         mut server: ResMut<RenetServer>,
-        mut message_reader: ResMut<MessageReader>,
+        mut message_reader: ResMut<MessageReaderOnServer>,
     ) {
         for client_id in server.clients_id() {
             while let Some(message) =
@@ -175,7 +210,7 @@ pub mod server {
         }
     }
 
-    fn clear_messages(mut message_reader: ResMut<MessageReader>) {
+    fn clear_messages(mut message_reader: ResMut<MessageReaderOnServer>) {
         if message_reader.reliable_messages.len() > 0 {
             dbg!(&message_reader.reliable_messages);
         }

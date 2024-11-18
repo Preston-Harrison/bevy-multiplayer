@@ -1,6 +1,5 @@
 #![allow(irrefutable_let_patterns)]
 /// Allowed as most enums will have more stuff in the future.
-
 use std::env;
 
 mod client;
