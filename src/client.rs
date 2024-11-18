@@ -46,7 +46,10 @@ pub fn run() {
         )
         .insert_state(shared::AppState::MainMenu)
         .add_plugins(shared::Game)
-        .add_plugins(message::client::ClientMessagePlugin)
+        .add_plugins(message::client::ClientMessagePlugin {
+            latency: Some(0.2),
+            message_loss: Some(0.05),
+        })
         .run();
 }
 
