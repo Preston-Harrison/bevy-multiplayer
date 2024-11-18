@@ -1,8 +1,5 @@
-use bevy::color::palettes::tailwind;
 use bevy::input::mouse::MouseMotion;
-use bevy::pbr::NotShadowCaster;
 use bevy::prelude::*;
-use bevy::render::view::RenderLayers;
 use bevy_renet::renet::transport::{ClientAuthentication, NetcodeClientTransport};
 use bevy_renet::renet::{ConnectionConfig, DefaultChannel, RenetClient};
 use bevy_renet::transport::NetcodeClientPlugin;
@@ -190,7 +187,7 @@ enum LoadState {
     Connecting,
     LocalLoaded,
     RemoteLoading,
-    RemoteLoaded,
+    Done,
 }
 
 fn handle_connect_button(
@@ -261,6 +258,7 @@ fn set_local_player(
     reader: Res<MessageReader>,
     client: Option<ResMut<RenetClient>>,
     mut app_state: ResMut<NextState<AppState>>,
+    mut load_state: ResMut<LoadState>,
 ) {
     let Some(mut client) = client else {
         return;
@@ -273,6 +271,7 @@ fn set_local_player(
             let bytes = bincode::serialize(&message).unwrap();
             client.send_message(DefaultChannel::ReliableUnordered, bytes);
             app_state.set(AppState::InGame);
+            *load_state = LoadState::Done;
         }
     }
 }
