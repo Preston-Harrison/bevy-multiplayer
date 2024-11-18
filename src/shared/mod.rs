@@ -27,6 +27,7 @@ pub enum AppState {
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub enum GameLogic {
     Read,
+    /// Spawn and despawn.
     Spawn,
     Sync,
     Game,
@@ -51,6 +52,7 @@ fn despawn(
         for (e, obj) in query.iter() {
             if obj.id == network_obj.id {
                 commands.entity(e).despawn();
+                break;
             }
         }
     }
@@ -60,7 +62,7 @@ pub struct Game;
 
 impl Plugin for Game {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, despawn.in_set(ClientOnly));
+        app.add_systems(Update, despawn.in_set(ClientOnly).in_set(GameLogic::Spawn));
         app.add_plugins(BallPlugin);
         app.insert_resource(RandomBallTimer(Timer::new(
             Duration::from_secs(10),
@@ -105,13 +107,15 @@ fn spawn_random_balls(
     mut server: ResMut<RenetServer>,
 ) {
     if timer.0.tick(time.delta()).finished() {
+        let mut despawns = 0;
         for (entity, obj, _, _) in balls.iter() {
+            despawns += 1;
             let message = ReliableMessageFromServer::Despawn(obj.clone());
             let bytes = bincode::serialize(&message).unwrap();
             server.broadcast_message(DefaultChannel::ReliableUnordered, bytes);
             commands.entity(entity).despawn();
         }
-        println!("spawning random balls");
+        println!("spawning random balls, despawning {despawns}");
         random_balls(commands);
     } else {
         for (_, _, mut transform, move_up) in balls.iter_mut() {

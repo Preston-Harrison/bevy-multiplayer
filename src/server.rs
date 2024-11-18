@@ -3,7 +3,8 @@ use std::{net::UdpSocket, time::SystemTime};
 use bevy::prelude::*;
 use bevy_renet::{
     renet::{
-        transport::{NetcodeServerTransport, ServerAuthentication, ServerConfig}, ConnectionConfig, DefaultChannel, RenetServer, ServerEvent
+        transport::{NetcodeServerTransport, ServerAuthentication, ServerConfig},
+        ConnectionConfig, DefaultChannel, RenetServer, ServerEvent,
     },
     transport::NetcodeServerPlugin,
     RenetServerPlugin,
