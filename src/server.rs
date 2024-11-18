@@ -1,10 +1,10 @@
 use std::{net::UdpSocket, time::SystemTime};
 
-use bevy::prelude::*;
+use bevy::{prelude::*, utils::HashMap};
 use bevy_renet::{
     renet::{
         transport::{NetcodeServerTransport, ServerAuthentication, ServerConfig},
-        ConnectionConfig, DefaultChannel, RenetServer, ServerEvent,
+        ClientId, ConnectionConfig, DefaultChannel, RenetServer, ServerEvent,
     },
     transport::NetcodeServerPlugin,
     RenetServerPlugin,
@@ -18,8 +18,9 @@ use crate::{
         spawn::NetworkSpawn,
     },
     shared::{
-        self,
-        objects::{Ball, NetworkObject},
+        self, despawn_recursive_and_broadcast,
+        objects::{player::Player, Ball, NetworkObject},
+        GameLogic,
     },
 };
 
@@ -27,7 +28,10 @@ pub fn run() {
     App::new()
         .add_plugins((DefaultPlugins, Server))
         .add_systems(Startup, setup)
-        .add_systems(Update, (handle_server_events, sync_game))
+        .add_systems(
+            Update,
+            (handle_server_events, handle_ready_game).in_set(GameLogic::Sync),
+        )
         .add_plugins((shared::Game, message::server::ServerMessagePlugin))
         .insert_state(shared::AppState::InGame)
         .run();
@@ -38,6 +42,7 @@ struct Server;
 impl Plugin for Server {
     fn build(&self, app: &mut App) {
         app.add_plugins(RenetServerPlugin);
+        app.insert_resource(ClientNetworkObjectMap::default());
 
         let server = RenetServer::new(ConnectionConfig::default());
         app.insert_resource(server);
@@ -63,28 +68,80 @@ fn setup(mut commands: Commands) {
     commands.spawn(Camera3dBundle::default());
 }
 
-fn handle_server_events(mut server: EventReader<ServerEvent>) {
-    for event in server.read() {
+#[derive(Resource, Default)]
+pub struct ClientNetworkObjectMap(pub HashMap<ClientId, NetworkObject>);
+
+fn handle_server_events(
+    mut server_events: EventReader<ServerEvent>,
+    mut client_map: ResMut<ClientNetworkObjectMap>,
+    query: Query<(Entity, &NetworkObject), With<Player>>,
+    mut server: ResMut<RenetServer>,
+    mut commands: Commands,
+) {
+    for event in server_events.read() {
         match event {
             ServerEvent::ClientConnected { client_id } => {
                 println!("Client {} connected", client_id);
             }
             ServerEvent::ClientDisconnected { client_id, reason } => {
                 println!("Client {} disconnected: {:?}", client_id, reason);
+                if let Some(net_obj) = client_map.0.remove(client_id) {
+                    for (entity, obj) in query.iter() {
+                        if obj.id == net_obj.id {
+                            despawn_recursive_and_broadcast(
+                                &mut server,
+                                &mut commands,
+                                entity,
+                                net_obj.clone(),
+                            );
+                            break;
+                        }
+                    }
+                }
             }
         }
     }
 }
 
-fn sync_game(
+fn handle_ready_game(
     mut server: ResMut<RenetServer>,
     reader: Res<MessageReader>,
     ball_query: Query<(&NetworkObject, &Transform), With<Ball>>,
+    player_query: Query<(&NetworkObject, &Transform), With<Player>>,
+    mut client_map: ResMut<ClientNetworkObjectMap>,
+    mut commands: Commands,
 ) {
     for (client_id, msg) in reader.reliable_messages() {
-        if *msg == ReliableMessageFromClient::Ready {
+        if *msg == ReliableMessageFromClient::Connected {
+            if client_map.0.contains_key(client_id) {
+                println!("connected called twice");
+                continue;
+            }
+            println!("sending player network object");
+            let net_obj = NetworkObject::rand();
+            let message = ReliableMessageFromServer::SetPlayerNetworkObject(net_obj.clone());
+            let bytes = bincode::serialize(&message).unwrap();
+            server.send_message(*client_id, DefaultChannel::ReliableUnordered, bytes);
+            client_map.0.insert(*client_id, net_obj.clone());
+        }
+        if *msg == ReliableMessageFromClient::ReadyForUpdates {
+            let Some(net_obj) = client_map.0.get(client_id) else {
+                println!("ready called twice");
+                continue;
+            };
+            println!("spawning player and syncing game objects");
+            commands.spawn((Player, Transform::from_xyz(0.0, 1.0, 0.0), net_obj.clone()));
+
             for (net_obj, transform) in ball_query.iter() {
                 let spawn = NetworkSpawn::Ball(transform.clone());
+                let message = ReliableMessageFromServer::Spawn(net_obj.clone(), spawn);
+                let bytes = bincode::serialize(&message).unwrap();
+                server.send_message(*client_id, DefaultChannel::ReliableUnordered, bytes);
+            }
+
+            // Won't include player just spawned.
+            for (net_obj, transform) in player_query.iter() {
+                let spawn = NetworkSpawn::Player(transform.clone());
                 let message = ReliableMessageFromServer::Spawn(net_obj.clone(), spawn);
                 let bytes = bincode::serialize(&message).unwrap();
                 server.send_message(*client_id, DefaultChannel::ReliableUnordered, bytes);

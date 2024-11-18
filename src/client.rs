@@ -11,20 +11,25 @@ use bevy_renet::RenetClientPlugin;
 use std::net::UdpSocket;
 use std::time::SystemTime;
 
-use crate::message::client::ReliableMessageFromClient;
-use crate::shared::AppState;
-use crate::{message, shared, shared::render};
+use crate::message::client::{MessageReader, ReliableMessageFromClient};
+use crate::message::server::ReliableMessageFromServer;
+use crate::shared::objects::player::{LocalPlayer, LocalPlayerTag, Player};
+use crate::shared::objects::NetworkObject;
+use crate::shared::{AppState, GameLogic};
+use crate::{message, shared};
 
 pub fn run() {
     App::new()
         .add_plugins((DefaultPlugins, Client))
-        .add_systems(
-            Startup,
-            (spawn_view_model, spawn_text, spawn_connect_button),
-        )
+        .add_systems(Startup, (spawn_text, spawn_connect_button))
         .add_systems(
             Update,
-            (move_player, handle_connect_button, send_ready, load_local),
+            (
+                (move_player, handle_connect_button, spawn_view_model),
+                (send_ready, load_local, set_local_player)
+                    .before(GameLogic::Clear)
+                    .after(GameLogic::Read),
+            ),
         )
         .insert_resource(LoadState::None)
         .insert_state(shared::AppState::MainMenu)
@@ -43,73 +48,47 @@ impl Plugin for Client {
 }
 
 #[derive(Debug, Component)]
-struct Player;
-
-#[derive(Debug, Component)]
 struct WorldModelCamera;
 
 fn spawn_view_model(
     mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    players: Query<(Entity, &NetworkObject), Added<Player>>,
+    cameras: Query<Entity, With<UICamera>>,
+    local_player: Option<Res<LocalPlayer>>,
 ) {
-    let arm = meshes.add(Cuboid::new(0.1, 0.1, 0.5));
-    let arm_material = materials.add(Color::from(tailwind::TEAL_200));
+    let Some(local_player) = local_player else {
+        return;
+    };
 
-    commands
-        .spawn((
-            Player,
-            SpatialBundle {
-                transform: Transform::from_xyz(0.0, 1.0, 0.0),
+    let mut entity = None;
+    for (e, net_obj) in players.iter() {
+        if *net_obj == local_player.0 {
+            entity = Some(e);
+        }
+    }
+
+    let Some(entity) = entity else {
+        return;
+    };
+
+    for camera in cameras.iter() {
+        commands.entity(camera).despawn_recursive();
+    }
+
+    println!("spawning player camera");
+    commands.entity(entity).with_children(|parent| {
+        parent.spawn((
+            WorldModelCamera,
+            Camera3dBundle {
+                projection: PerspectiveProjection {
+                    fov: 90.0_f32.to_radians(),
+                    ..default()
+                }
+                .into(),
                 ..default()
             },
-        ))
-        .with_children(|parent| {
-            parent.spawn((
-                WorldModelCamera,
-                Camera3dBundle {
-                    projection: PerspectiveProjection {
-                        fov: 90.0_f32.to_radians(),
-                        ..default()
-                    }
-                    .into(),
-                    ..default()
-                },
-            ));
-
-            // Spawn view model camera.
-            parent.spawn((
-                Camera3dBundle {
-                    camera: Camera {
-                        // Bump the order to render on top of the world model.
-                        order: 1,
-                        ..default()
-                    },
-                    projection: PerspectiveProjection {
-                        fov: 70.0_f32.to_radians(),
-                        ..default()
-                    }
-                    .into(),
-                    ..default()
-                },
-                // Only render objects belonging to the view model.
-                RenderLayers::layer(render::VIEW_MODEL_RENDER_LAYER),
-            ));
-
-            // Spawn the player's right arm.
-            parent.spawn((
-                MaterialMeshBundle {
-                    mesh: arm,
-                    material: arm_material,
-                    transform: Transform::from_xyz(0.2, -0.1, -0.25),
-                    ..default()
-                },
-                // Ensure the arm is only rendered by the view model camera.
-                RenderLayers::layer(render::VIEW_MODEL_RENDER_LAYER),
-                // The arm is free-floating, so shadows would look weird.
-                NotShadowCaster,
-            ));
-        });
+        ));
+    });
 }
 
 fn spawn_text(mut commands: Commands) {
@@ -140,9 +119,11 @@ fn spawn_text(mut commands: Commands) {
 
 fn move_player(
     mut mouse_motion: EventReader<MouseMotion>,
-    mut player: Query<&mut Transform, With<Player>>,
+    mut player: Query<&mut Transform, With<LocalPlayerTag>>,
 ) {
-    let mut transform = player.single_mut();
+    let Ok(mut transform) = player.get_single_mut() else {
+        return;
+    };
     for motion in mouse_motion.read() {
         let yaw = -motion.delta.x * 0.003;
         let pitch = -motion.delta.y * 0.002;
@@ -155,7 +136,11 @@ fn move_player(
 #[derive(Component)]
 struct ConnectButton;
 
-fn spawn_connect_button(mut commands: Commands, asset_server: Res<AssetServer>) {
+#[derive(Component)]
+struct UICamera;
+
+fn spawn_connect_button(mut commands: Commands) {
+    commands.spawn((UICamera, Camera3dBundle::default()));
     commands
         .spawn(NodeBundle {
             style: Style {
@@ -220,6 +205,7 @@ fn handle_connect_button(
     for interaction in button.iter() {
         match *interaction {
             Interaction::Pressed => {
+                println!("clicked");
                 *load_state = LoadState::Connecting;
                 commands.entity(parent.single()).despawn_recursive();
 
@@ -253,9 +239,7 @@ fn load_local(world: &mut World) {
         }
         shared::scenes::setup_scene_1(world);
         *load_state = LoadState::LocalLoaded;
-        let mut app_state = world.get_resource_mut::<NextState<AppState>>().unwrap();
-        app_state.set(AppState::InGame);
-        println!("in game");
+        println!("loaded local");
     })
 }
 
@@ -264,9 +248,31 @@ fn send_ready(mut load_state: ResMut<LoadState>, client: Option<ResMut<RenetClie
         return;
     };
     if *load_state == LoadState::LocalLoaded && client.is_connected() {
-        let message = ReliableMessageFromClient::Ready;
+        let message = ReliableMessageFromClient::Connected;
+        println!("connected");
         let bytes = bincode::serialize(&message).unwrap();
         client.send_message(DefaultChannel::ReliableUnordered, bytes);
         *load_state = LoadState::RemoteLoading;
+    }
+}
+
+fn set_local_player(
+    mut commands: Commands,
+    reader: Res<MessageReader>,
+    client: Option<ResMut<RenetClient>>,
+    mut app_state: ResMut<NextState<AppState>>,
+) {
+    let Some(mut client) = client else {
+        return;
+    };
+    for msg in reader.reliable_messages() {
+        if let ReliableMessageFromServer::SetPlayerNetworkObject(net_obj) = msg {
+            println!("set local player");
+            commands.insert_resource(LocalPlayer(net_obj.clone()));
+            let message = ReliableMessageFromClient::ReadyForUpdates;
+            let bytes = bincode::serialize(&message).unwrap();
+            client.send_message(DefaultChannel::ReliableUnordered, bytes);
+            app_state.set(AppState::InGame);
+        }
     }
 }

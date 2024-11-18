@@ -1,5 +1,5 @@
 pub mod client {
-    use crate::shared::GameLogic;
+    use crate::shared::{objects::player, GameLogic};
 
     use super::server::{ReliableMessageFromServer, UnreliableMessageFromServer};
     use bevy::prelude::*;
@@ -34,15 +34,18 @@ pub mod client {
     impl Plugin for ClientMessagePlugin {
         fn build(&self, app: &mut App) {
             app.insert_resource(MessageReader::new())
-                .add_systems(Update, read_messages_from_server.in_set(GameLogic::Read))
+                .add_systems(Update, read_messages_from_server.before(GameLogic::Read))
                 .add_systems(Update, clear_messages.after(GameLogic::Clear));
         }
     }
 
     fn read_messages_from_server(
-        mut client: ResMut<RenetClient>,
+        client: Option<ResMut<RenetClient>>,
         mut message_reader: ResMut<MessageReader>,
     ) {
+        let Some(mut client) = client else {
+            return;
+        };
         while let Some(message) = client.receive_message(DefaultChannel::ReliableUnordered) {
             if let Ok(parsed_message) = bincode::deserialize::<ReliableMessageFromServer>(&message)
             {
@@ -70,11 +73,14 @@ pub mod client {
 
     #[derive(Serialize, Deserialize, Debug, PartialEq)]
     pub enum ReliableMessageFromClient {
-        Ready,
+        Connected,
+        ReadyForUpdates,
     }
 
     #[derive(Serialize, Deserialize, Debug)]
-    pub enum UnreliableMessageFromClient {}
+    pub enum UnreliableMessageFromClient {
+        Input(player::Input),
+    }
 }
 
 pub mod server {
@@ -93,11 +99,13 @@ pub mod server {
     pub enum ReliableMessageFromServer {
         Spawn(NetworkObject, NetworkSpawn),
         Despawn(NetworkObject),
+        SetPlayerNetworkObject(NetworkObject),
     }
 
     #[derive(Serialize, Deserialize, Debug)]
     pub enum UnreliableMessageFromServer {
         TransformSync(NetworkObject, Transform),
+        PositionSync(NetworkObject, Vec3),
     }
 
     #[derive(Resource)]
@@ -128,7 +136,7 @@ pub mod server {
     impl Plugin for ServerMessagePlugin {
         fn build(&self, app: &mut App) {
             app.insert_resource(MessageReader::new())
-                .add_systems(Update, read_messages_from_clients.in_set(GameLogic::Read))
+                .add_systems(Update, read_messages_from_clients.before(GameLogic::Read))
                 .add_systems(Update, clear_messages.after(GameLogic::Clear));
         }
     }
@@ -168,6 +176,9 @@ pub mod server {
     }
 
     fn clear_messages(mut message_reader: ResMut<MessageReader>) {
+        if message_reader.reliable_messages.len() > 0 {
+            dbg!(&message_reader.reliable_messages);
+        }
         message_reader.reliable_messages.clear();
         message_reader.unreliable_messages.clear();
     }
@@ -179,7 +190,7 @@ pub mod spawn {
 
     #[derive(Serialize, Deserialize, Debug)]
     pub enum NetworkSpawn {
-        Player,
+        Player(Transform),
         Ball(Transform),
     }
 }

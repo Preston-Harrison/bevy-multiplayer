@@ -8,7 +8,7 @@ use crate::message::{client::MessageReader, server::ReliableMessageFromServer};
 
 use self::{
     cond::{run_if_is_client, run_if_is_server},
-    objects::{Ball, BallPlugin, NetworkObject},
+    objects::{player::PlayerPlugin, Ball, BallPlugin, NetworkObject},
 };
 
 pub mod cond;
@@ -30,6 +30,7 @@ pub enum GameLogic {
     /// Spawn and despawn.
     Spawn,
     Sync,
+    Input,
     Game,
     Clear,
 }
@@ -63,7 +64,7 @@ pub struct Game;
 impl Plugin for Game {
     fn build(&self, app: &mut App) {
         app.add_systems(Update, despawn.in_set(ClientOnly).in_set(GameLogic::Spawn));
-        app.add_plugins(BallPlugin);
+        app.add_plugins((BallPlugin, PlayerPlugin));
         app.insert_resource(RandomBallTimer(Timer::new(
             Duration::from_secs(10),
             TimerMode::Repeating,
@@ -81,6 +82,7 @@ impl Plugin for Game {
                     GameLogic::Read,
                     GameLogic::Spawn,
                     GameLogic::Sync,
+                    GameLogic::Input,
                     GameLogic::Game,
                     GameLogic::Clear,
                 )
@@ -110,10 +112,7 @@ fn spawn_random_balls(
         let mut despawns = 0;
         for (entity, obj, _, _) in balls.iter() {
             despawns += 1;
-            let message = ReliableMessageFromServer::Despawn(obj.clone());
-            let bytes = bincode::serialize(&message).unwrap();
-            server.broadcast_message(DefaultChannel::ReliableUnordered, bytes);
-            commands.entity(entity).despawn();
+            despawn_recursive_and_broadcast(&mut server, &mut commands, entity, obj.clone());
         }
         println!("spawning random balls, despawning {despawns}");
         random_balls(commands);
@@ -142,4 +141,16 @@ fn random_balls(mut commands: Commands) {
             e.insert(MoveUp);
         }
     }
+}
+
+pub fn despawn_recursive_and_broadcast(
+    server: &mut RenetServer,
+    commands: &mut Commands,
+    entity: Entity,
+    net_obj: NetworkObject,
+) {
+    let message = ReliableMessageFromServer::Despawn(net_obj);
+    let bytes = bincode::serialize(&message).unwrap();
+    server.broadcast_message(DefaultChannel::ReliableUnordered, bytes);
+    commands.entity(entity).despawn_recursive();
 }

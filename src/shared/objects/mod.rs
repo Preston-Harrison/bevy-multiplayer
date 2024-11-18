@@ -10,7 +10,9 @@ use serde::{Deserialize, Serialize};
 
 use super::{ClientOnly, GameLogic, ServerOnly};
 
-#[derive(Serialize, Deserialize, Component, Clone, Debug)]
+pub mod player;
+
+#[derive(Serialize, Deserialize, Component, Clone, Debug, Hash, PartialEq, Eq)]
 pub struct NetworkObject {
     pub id: u64,
 }
