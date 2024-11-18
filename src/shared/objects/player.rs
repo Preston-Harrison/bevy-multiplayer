@@ -215,9 +215,13 @@ fn apply_inputs(
 ) {
     for (mut transform, net_obj) in query.iter_mut() {
         if let Some(input) = inputs.0.get(net_obj) {
-            transform.translation += input.direction * 5.0 * time.delta_seconds();
+            apply_input(input, &mut transform, &time);
         }
     }
+}
+
+fn apply_input(input: &Input, transform: &mut Transform, time: &Time) {
+    transform.translation += input.direction * 5.0 * time.delta_seconds();
 }
 
 fn clear_inputs(mut inputs: ResMut<ClientInputs>) {
