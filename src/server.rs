@@ -3,21 +3,32 @@ use std::{net::UdpSocket, time::SystemTime};
 use bevy::prelude::*;
 use bevy_renet::{
     renet::{
-        transport::{NetcodeServerTransport, ServerAuthentication, ServerConfig},
-        ConnectionConfig, RenetServer, ServerEvent,
+        transport::{NetcodeServerTransport, ServerAuthentication, ServerConfig}, ConnectionConfig, DefaultChannel, RenetServer, ServerEvent
     },
     transport::NetcodeServerPlugin,
     RenetServerPlugin,
 };
 
-use crate::shared;
+use crate::{
+    message::{
+        self,
+        client::ReliableMessageFromClient,
+        server::{MessageReader, ReliableMessageFromServer},
+        spawn::NetworkSpawn,
+    },
+    shared::{
+        self,
+        objects::{Ball, NetworkObject},
+    },
+};
 
 pub fn run() {
     App::new()
         .add_plugins((DefaultPlugins, Server))
         .add_systems(Startup, setup)
-        .add_systems(Update, handle_server_events)
-        .add_plugins(shared::Game)
+        .add_systems(Update, (handle_server_events, sync_game))
+        .add_plugins((shared::Game, message::server::ServerMessagePlugin))
+        .insert_state(shared::AppState::InGame)
         .run();
 }
 
@@ -59,6 +70,23 @@ fn handle_server_events(mut server: EventReader<ServerEvent>) {
             }
             ServerEvent::ClientDisconnected { client_id, reason } => {
                 println!("Client {} disconnected: {:?}", client_id, reason);
+            }
+        }
+    }
+}
+
+fn sync_game(
+    mut server: ResMut<RenetServer>,
+    reader: Res<MessageReader>,
+    ball_query: Query<(&NetworkObject, &Transform), With<Ball>>,
+) {
+    for (client_id, msg) in reader.reliable_messages() {
+        if *msg == ReliableMessageFromClient::Ready {
+            for (net_obj, transform) in ball_query.iter() {
+                let spawn = NetworkSpawn::Ball(transform.clone());
+                let message = ReliableMessageFromServer::Spawn(net_obj.clone(), spawn);
+                let bytes = bincode::serialize(&message).unwrap();
+                server.send_message(*client_id, DefaultChannel::ReliableUnordered, bytes);
             }
         }
     }
