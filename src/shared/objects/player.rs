@@ -43,7 +43,7 @@ impl Plugin for PlayerPlugin {
         app.insert_resource(ClientInputs::default());
         app.insert_resource(InputBuffer::default());
         app.add_systems(
-            Update,
+            FixedUpdate,
             (
                 spawn_players.in_set(ClientOnly).in_set(GameLogic::Spawn),
                 recv_player_data.in_set(ClientOnly).in_set(GameLogic::Sync),
@@ -57,9 +57,9 @@ impl Plugin for PlayerPlugin {
                 broadcast_player_spawns
                     .in_set(ServerOnly)
                     .in_set(GameLogic::Sync),
-                rotate_player.in_set(ClientOnly),
             ),
         );
+        app.add_systems(Update, rotate_player.in_set(ClientOnly));
     }
 }
 

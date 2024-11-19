@@ -67,10 +67,10 @@ pub mod client {
     impl Plugin for ClientMessagePlugin {
         fn build(&self, app: &mut App) {
             app.insert_resource(MessageReaderOnClient::new(self.latency, self.message_loss))
-                .add_systems(Update, read_messages_from_server.in_set(MessageSet::Read))
-                .add_systems(Update, clear_messages.in_set(MessageSet::Clear));
+                .add_systems(FixedUpdate, read_messages_from_server.in_set(MessageSet::Read))
+                .add_systems(FixedUpdate, clear_messages.in_set(MessageSet::Clear));
             app.configure_sets(
-                Update,
+                FixedUpdate,
                 (
                     MessageSet::Read.before(GameLogic::Read),
                     MessageSet::Clear.after(GameLogic::Clear),
@@ -231,10 +231,10 @@ pub mod server {
     impl Plugin for ServerMessagePlugin {
         fn build(&self, app: &mut App) {
             app.insert_resource(MessageReaderOnServer::new())
-                .add_systems(Update, read_messages_from_clients.in_set(MessageSet::Read))
-                .add_systems(Update, clear_messages.after(MessageSet::Clear));
+                .add_systems(FixedUpdate, read_messages_from_clients.in_set(MessageSet::Read))
+                .add_systems(FixedUpdate, clear_messages.after(MessageSet::Clear));
             app.configure_sets(
-                Update,
+                FixedUpdate,
                 (
                     MessageSet::Read.before(GameLogic::Read),
                     MessageSet::Clear.after(GameLogic::Clear),

@@ -32,15 +32,14 @@ pub struct BallPlugin;
 
 impl Plugin for BallPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, broadcast_ball_spawns.in_set(ServerOnly));
         app.add_systems(
-            Update,
-            spawn_balls.in_set(ClientOnly).in_set(GameLogic::Spawn),
-        );
-        app.add_systems(Update, broadcast_ball_data.in_set(ServerOnly));
-        app.add_systems(
-            Update,
-            recv_ball_data.in_set(ClientOnly).in_set(GameLogic::Sync),
+            FixedUpdate,
+            (
+                broadcast_ball_spawns.in_set(ServerOnly),
+                spawn_balls.in_set(ClientOnly).in_set(GameLogic::Spawn),
+                broadcast_ball_data.in_set(ServerOnly),
+                recv_ball_data.in_set(ClientOnly).in_set(GameLogic::Sync),
+            )
         );
     }
 }

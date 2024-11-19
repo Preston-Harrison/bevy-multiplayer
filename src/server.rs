@@ -29,7 +29,7 @@ pub fn run() {
         .add_plugins((DefaultPlugins, Server))
         .add_systems(Startup, setup)
         .add_systems(
-            Update,
+            FixedUpdate,
             (handle_server_events, handle_ready_game).in_set(GameLogic::Sync),
         )
         .add_plugins((shared::Game, message::server::ServerMessagePlugin))

@@ -31,12 +31,12 @@ pub fn run() {
         .insert_state(LoadState::Init)
         .add_systems(Startup, spawn_connect_button)
         .add_systems(
-            Update,
+            FixedUpdate,
             spawn_view_model.run_if(in_state(LoadState::WaitingForPlayerSpawn)),
         )
         .add_systems(OnEnter(LoadState::Connecting), load_local)
         .add_systems(
-            Update,
+            FixedUpdate,
             (
                 handle_connect_button.run_if(in_state(LoadState::Init)),
                 send_ready.run_if(in_state(LoadState::LocalLoaded)),

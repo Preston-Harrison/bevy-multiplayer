@@ -15,6 +15,7 @@ pub mod cond;
 pub mod objects;
 pub mod render;
 pub mod scenes;
+pub mod tick;
 
 pub const SERVER_ADDR: &str = "127.0.0.1:5000";
 
@@ -63,20 +64,20 @@ pub struct Game;
 
 impl Plugin for Game {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, despawn.in_set(ClientOnly).in_set(GameLogic::Spawn));
+        app.add_systems(FixedUpdate, despawn.in_set(ClientOnly).in_set(GameLogic::Spawn));
         app.add_plugins((BallPlugin, PlayerPlugin));
         app.insert_resource(RandomBallTimer(Timer::new(
             Duration::from_secs(10),
             TimerMode::Repeating,
         )));
         app.add_systems(
-            Update,
+            FixedUpdate,
             spawn_random_balls
                 .in_set(ServerOnly)
                 .in_set(GameLogic::Game),
         );
         app.configure_sets(
-            Update,
+            FixedUpdate,
             (
                 (
                     GameLogic::Read,
