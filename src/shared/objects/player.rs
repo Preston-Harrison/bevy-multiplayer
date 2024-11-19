@@ -163,7 +163,6 @@ fn spawn_players(
     mut materials: ResMut<Assets<StandardMaterial>>,
     reader: Res<MessageReaderOnClient>,
     local_player: Res<LocalPlayer>,
-    tick: Res<Tick>,
 ) {
     for msg in reader.reliable_messages() {
         let ReliableMessageFromServer::Spawn(spawn) = msg else {
@@ -178,7 +177,7 @@ fn spawn_players(
                 transform,
                 ..Default::default()
             })
-            .insert(LastSyncTracker::<Transform>::new(tick.clone()))
+            .insert(LastSyncTracker::<Transform>::new(spawn.tick.clone()))
             .insert(spawn.net_obj.clone());
             if spawn.net_obj == local_player.0 {
                 e.insert(LocalPlayerTag);

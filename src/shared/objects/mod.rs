@@ -84,7 +84,6 @@ fn spawn_balls(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     reader: Res<MessageReaderOnClient>,
-    tick: Res<Tick>,
 ) {
     for msg in reader.reliable_messages() {
         let ReliableMessageFromServer::Spawn(spawn) = msg else {
@@ -99,7 +98,7 @@ fn spawn_balls(
                     transform,
                     ..Default::default()
                 })
-                .insert(LastSyncTracker::<Transform>::new(tick.clone()))
+                .insert(LastSyncTracker::<Transform>::new(spawn.tick.clone()))
                 .insert(spawn.net_obj.clone());
         }
     }
