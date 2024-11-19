@@ -1,12 +1,27 @@
+use std::time::Duration;
+
 use bevy::prelude::*;
+use bevy_renet::renet::{DefaultChannel, RenetServer};
 use serde::{Deserialize, Serialize};
 
-use crate::message::{client::MessageReaderOnClient, server::ReliableMessageFromServer};
+use crate::message::{
+    client::MessageReaderOnClient,
+    server::{ReliableMessageFromServer, TickSync},
+};
 
-use super::{ClientOnly, GameLogic};
+use super::{ClientOnly, GameLogic, ServerOnly};
 
 #[derive(Resource, Serialize, Deserialize, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Tick(u64);
+
+#[derive(Resource)]
+pub struct TickTimer(Timer);
+
+impl Default for TickTimer {
+    fn default() -> Self {
+        Self(Timer::new(Duration::from_secs(10), TimerMode::Repeating))
+    }
+}
 
 impl Tick {
     pub fn new(tick: u64) -> Self {
@@ -32,10 +47,15 @@ impl Plugin for TickPlugin {
                     .in_set(ClientOnly)
                     .in_set(GameLogic::Start)
                     .after(tick),
+                send_tick_update
+                    .in_set(ServerOnly)
+                    .in_set(GameLogic::Start)
+                    .after(tick),
             ),
         );
         if self.is_server {
             app.insert_resource(Tick::new(0));
+            app.insert_resource(TickTimer::default());
         }
     }
 }
@@ -47,8 +67,29 @@ fn tick(mut tick: ResMut<Tick>) {
 fn recv_tick_update(reader: Res<MessageReaderOnClient>, mut curr_tick: ResMut<Tick>) {
     for msg in reader.reliable_messages() {
         if let ReliableMessageFromServer::TickSync(sync) = msg {
-            *curr_tick = get_client_tick(sync.tick, sync.unix_millis);
+            // TODO: figure out why this is out of sync.
+            let next_tick = get_client_tick(sync.tick, sync.unix_millis);
+            info!("tick updated from {:?} to {:?}", *curr_tick, next_tick);
+            *curr_tick = next_tick;
         }
+    }
+}
+
+fn send_tick_update(
+    mut timer: ResMut<TickTimer>,
+    mut server: ResMut<RenetServer>,
+    time: Res<Time>,
+    tick: Res<Tick>,
+) {
+    timer.0.tick(time.delta());
+    if timer.0.just_finished() {
+        let message = ReliableMessageFromServer::TickSync(TickSync {
+            tick: tick.get(),
+            unix_millis: get_unix_millis(),
+        });
+        let bytes = bincode::serialize(&message).unwrap();
+        server.broadcast_message(DefaultChannel::ReliableUnordered, bytes);
+        info!("tick sync sent");
     }
 }
 

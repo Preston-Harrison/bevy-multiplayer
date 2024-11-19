@@ -2,7 +2,7 @@ use std::marker::PhantomData;
 
 use crate::message::{
     client::MessageReaderOnClient,
-    server::{ReliableMessageFromServer, UnreliableMessageFromServer},
+    server::{ReliableMessageFromServer, Spawn, UnreliableMessageFromServer},
     spawn::NetworkSpawn,
 };
 use bevy::prelude::*;
@@ -64,10 +64,16 @@ impl Plugin for BallPlugin {
 fn broadcast_ball_spawns(
     query: Query<(&NetworkObject, &Transform), Added<Ball>>,
     mut server: ResMut<RenetServer>,
+    tick: Res<Tick>,
 ) {
     for (network_obj, transform) in query.iter() {
         let network_spawn = NetworkSpawn::Ball(transform.clone());
-        let message = ReliableMessageFromServer::Spawn(network_obj.clone(), network_spawn);
+        let spawn = Spawn {
+            net_obj: network_obj.clone(),
+            net_spawn: network_spawn,
+            tick: tick.clone(),
+        };
+        let message = ReliableMessageFromServer::Spawn(spawn);
         let bytes = bincode::serialize(&message).unwrap();
         server.broadcast_message(DefaultChannel::ReliableUnordered, bytes);
     }
@@ -81,20 +87,20 @@ fn spawn_balls(
     tick: Res<Tick>,
 ) {
     for msg in reader.reliable_messages() {
-        let ReliableMessageFromServer::Spawn(network_obj, network_spawn) = msg else {
+        let ReliableMessageFromServer::Spawn(spawn) = msg else {
             continue;
         };
-        if let NetworkSpawn::Ball(transform) = network_spawn {
+        if let NetworkSpawn::Ball(transform) = spawn.net_spawn {
             commands
                 .spawn(Ball)
                 .insert(PbrBundle {
                     mesh: meshes.add(Sphere::default().mesh().ico(5).unwrap()),
                     material: materials.add(Color::srgb(0.0, 0.0, 1.0)),
-                    transform: *transform,
+                    transform,
                     ..Default::default()
                 })
                 .insert(LastSyncTracker::<Transform>::new(tick.clone()))
-                .insert(network_obj.clone());
+                .insert(spawn.net_obj.clone());
         }
     }
 }

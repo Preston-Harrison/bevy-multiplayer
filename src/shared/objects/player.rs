@@ -8,7 +8,7 @@ use crate::{
     message::{
         client::{MessageReaderOnClient, OrderedInput, UnreliableMessageFromClient},
         server::{
-            self, PlayerPositionSync, ReliableMessageFromServer, UnreliableMessageFromServer,
+            self, PlayerPositionSync, ReliableMessageFromServer, Spawn, UnreliableMessageFromServer,
         },
         spawn::NetworkSpawn,
     },
@@ -141,10 +141,16 @@ impl Plugin for PlayerPlugin {
 fn broadcast_player_spawns(
     query: Query<(&NetworkObject, &Transform), Added<Player>>,
     mut server: ResMut<RenetServer>,
+    tick: Res<Tick>,
 ) {
     for (network_obj, transform) in query.iter() {
-        let network_spawn = NetworkSpawn::Player(transform.clone());
-        let message = ReliableMessageFromServer::Spawn(network_obj.clone(), network_spawn);
+        let net_spawn = NetworkSpawn::Player(transform.clone());
+        let spawn = Spawn {
+            net_spawn,
+            net_obj: network_obj.clone(),
+            tick: tick.clone(),
+        };
+        let message = ReliableMessageFromServer::Spawn(spawn);
         let bytes = bincode::serialize(&message).unwrap();
         server.broadcast_message(DefaultChannel::ReliableUnordered, bytes);
         println!("spawning player");
@@ -160,21 +166,21 @@ fn spawn_players(
     tick: Res<Tick>,
 ) {
     for msg in reader.reliable_messages() {
-        let ReliableMessageFromServer::Spawn(network_obj, network_spawn) = msg else {
+        let ReliableMessageFromServer::Spawn(spawn) = msg else {
             continue;
         };
-        if let NetworkSpawn::Player(transform) = network_spawn {
+        if let NetworkSpawn::Player(transform) = spawn.net_spawn {
             println!("spawning player");
             let mut e = commands.spawn(Player);
             e.insert(PbrBundle {
                 mesh: meshes.add(Sphere::default().mesh().ico(5).unwrap()),
                 material: materials.add(Color::srgb(0.0, 1.0, 0.0)),
-                transform: *transform,
+                transform,
                 ..Default::default()
             })
             .insert(LastSyncTracker::<Transform>::new(tick.clone()))
-            .insert(network_obj.clone());
-            if *network_obj == local_player.0 {
+            .insert(spawn.net_obj.clone());
+            if spawn.net_obj == local_player.0 {
                 e.insert(LocalPlayerTag);
             }
         }
