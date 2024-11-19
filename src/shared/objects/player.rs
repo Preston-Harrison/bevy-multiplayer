@@ -1,11 +1,15 @@
+use std::collections::VecDeque;
+
 use bevy::{input::mouse::MouseMotion, prelude::*, utils::HashMap};
 use bevy_renet::renet::{DefaultChannel, RenetClient, RenetServer};
 use serde::{Deserialize, Serialize};
 
 use crate::{
     message::{
-        client::{MessageReaderOnClient, UnreliableMessageFromClient},
-        server::{self, ReliableMessageFromServer, UnreliableMessageFromServer},
+        client::{MessageReaderOnClient, OrderedInput, UnreliableMessageFromClient},
+        server::{
+            self, PlayerPositionSync, ReliableMessageFromServer, UnreliableMessageFromServer,
+        },
         spawn::NetworkSpawn,
     },
     server::ClientNetworkObjectMap,
@@ -22,15 +26,88 @@ pub struct Input {
     direction: Vec3,
 }
 
-/// `input_buffer.0[0]` is the newest input.
 #[derive(Resource, Default)]
-pub struct InputBuffer(HashMap<Tick, Input>);
+pub struct InputBuffer {
+    inputs: VecDeque<OrderedInput>,
+    count: u64,
+}
+
+impl InputBuffer {
+    fn push_input(&mut self, input: Input) -> u64 {
+        self.count += 1;
+        self.inputs.push_back(OrderedInput {
+            input,
+            order: self.count,
+        });
+        return self.count;
+    }
+
+    fn prune(&mut self, max_length: usize) {
+        while self.inputs.len() > max_length {
+            self.inputs.pop_front();
+        }
+    }
+
+    fn inputs_after_order(&self, order: u64) -> Vec<OrderedInput> {
+        self.inputs
+            .iter()
+            .filter(|input| input.order > order)
+            .cloned()
+            .collect()
+    }
+}
 
 #[derive(Resource, Default)]
-pub struct ClientInputs(HashMap<Tick, HashMap<NetworkObject, Input>>);
+pub struct ClientInputs(HashMap<NetworkObject, Vec<OrderedInput>>);
+
+impl ClientInputs {
+    fn push_input(&mut self, net_obj: NetworkObject, input: OrderedInput) {
+        self.0.entry(net_obj).or_default().push(input);
+    }
+
+    /// Removes and returns the lowest-order input for each `NetworkObject`.
+    fn pop_inputs(&mut self) -> HashMap<NetworkObject, OrderedInput> {
+        let mut inputs = HashMap::new();
+
+        for (obj, ord_inputs) in self.0.iter_mut() {
+            if let Some((min_index, _)) = ord_inputs
+                .iter()
+                .enumerate()
+                .min_by_key(|(_, input)| input.order)
+            {
+                // Remove and store the lowest-order input
+                let input = ord_inputs.remove(min_index);
+                inputs.insert(obj.clone(), input);
+            }
+        }
+
+        inputs
+    }
+
+    /// Ensures that each buffer in `ClientInputs` is no longer than `max_length`.
+    /// Removes the input with the lowest order if the buffer exceeds the limit.
+    fn prune(&mut self, max_length: usize) {
+        for (_, ord_inputs) in self.0.iter_mut() {
+            while ord_inputs.len() > max_length {
+                if let Some((min_index, _)) = ord_inputs
+                    .iter()
+                    .enumerate()
+                    .min_by_key(|(_, input)| input.order)
+                {
+                    ord_inputs.remove(min_index);
+                }
+            }
+        }
+    }
+}
 
 #[derive(Component)]
 pub struct Player;
+
+#[derive(Component, Default)]
+pub struct LastInputTracker {
+    order: u64,
+}
 
 #[derive(Component)]
 pub struct LocalPlayerTag;
@@ -105,16 +182,17 @@ fn spawn_players(
 }
 
 fn broadcast_player_data(
-    query: Query<(&NetworkObject, &Transform), With<Player>>,
+    query: Query<(&NetworkObject, &Transform, &LastInputTracker), With<Player>>,
     mut server: ResMut<RenetServer>,
     tick: Res<Tick>,
 ) {
-    for (obj, transform) in query.iter() {
-        let message = UnreliableMessageFromServer::PositionSync(
-            obj.clone(),
-            transform.translation.clone(),
-            tick.clone(),
-        );
+    for (obj, transform, last_input) in query.iter() {
+        let message = UnreliableMessageFromServer::PlayerPositionSync(PlayerPositionSync {
+            net_obj: obj.clone(),
+            translation: transform.translation.clone(),
+            tick: tick.clone(),
+            last_input_order: last_input.order,
+        });
         let bytes = bincode::serialize(&message).unwrap();
         server.broadcast_message(DefaultChannel::Unreliable, bytes);
     }
@@ -131,36 +209,22 @@ fn recv_player_data(
         With<Player>,
     >,
     local_player: Res<LocalPlayer>,
-    tick: Res<Tick>,
     ibuf: Res<InputBuffer>,
     time: Res<Time>,
 ) {
     for msg in reader.unreliable_messages() {
-        let UnreliableMessageFromServer::PositionSync(net_obj, net_translation, sync_tick) = msg
-        else {
+        let UnreliableMessageFromServer::PlayerPositionSync(pos_sync) = msg else {
             continue;
         };
         for (mut transform, obj, mut last_sync_tracker) in query.iter_mut() {
-            if obj.id == net_obj.id && last_sync_tracker.last_tick < *sync_tick {
-                last_sync_tracker.last_tick = sync_tick.clone();
-                transform.translation = *net_translation;
-                if net_obj.id != local_player.0.id {
-                    continue;
-                }
+            if obj.id == pos_sync.net_obj.id && last_sync_tracker.last_tick < pos_sync.tick {
+                last_sync_tracker.last_tick = pos_sync.tick.clone();
+                transform.translation = pos_sync.translation;
 
-                if tick.get() <= last_sync_tracker.last_tick.get() {
-                    warn!(
-                        "got player sync tick in the future. current={}, sync={}",
-                        tick.get(),
-                        last_sync_tracker.last_tick.get()
-                    );
-                    continue;
-                }
-
-                let ticks = last_sync_tracker.last_tick.get()..=tick.get();
-                for i in ticks {
-                    if let Some(input) = &ibuf.0.get(&Tick::new(i)) {
-                        apply_input(input, &mut transform, &time);
+                if pos_sync.net_obj.id == local_player.0.id {
+                    let inputs = ibuf.inputs_after_order(pos_sync.last_input_order);
+                    for input in inputs {
+                        apply_input(&input.input, &mut transform, &time);
                     }
                 }
             }
@@ -173,7 +237,6 @@ fn read_input(
     mut ibuf: ResMut<InputBuffer>,
     query: Query<&Transform, With<LocalPlayerTag>>,
     mut client: ResMut<RenetClient>,
-    tick: Res<Tick>,
 ) {
     if let Ok(player_transform) = query.get_single() {
         let mut local_direction = Vec3::ZERO;
@@ -210,25 +273,15 @@ fn read_input(
         };
 
         if final_direction.length_squared() > 0.0 {
-            let message = UnreliableMessageFromClient::Input(
-                Input {
-                    direction: final_direction,
-                },
-                tick.clone(),
-            );
+            let input = Input {
+                direction: final_direction,
+            };
+            let order = ibuf.push_input(input.clone());
+            let message = UnreliableMessageFromClient::Input(OrderedInput { input, order });
             let bytes = bincode::serialize(&message).unwrap();
             client.send_message(DefaultChannel::Unreliable, bytes);
-            ibuf.0.insert(
-                tick.clone(),
-                Input {
-                    direction: final_direction,
-                },
-            );
+            ibuf.prune(100);
         }
-
-        let max_ticks_to_keep = 100;
-        let oldest_tick_to_keep = tick.get().saturating_sub(max_ticks_to_keep);
-        ibuf.0.retain(|t, _| t.get() >= oldest_tick_to_keep);
     }
 }
 
@@ -236,39 +289,32 @@ fn read_inputs(
     mut inputs: ResMut<ClientInputs>,
     reader: Res<server::MessageReaderOnServer>,
     client_netmap: Res<ClientNetworkObjectMap>,
-    tick: Res<Tick>,
 ) {
     for (client_id, msg) in reader.unreliable_messages() {
-        if let UnreliableMessageFromClient::Input(input, input_tick) = msg {
+        if let UnreliableMessageFromClient::Input(ordered_input) = msg {
             // Map the client ID to the player's NetworkObject
             if let Some(net_obj) = client_netmap.0.get(client_id) {
                 // Insert the input into the HashMap for the specific tick
-                inputs
-                    .0
-                    .entry(input_tick.clone())
-                    .or_insert_with(HashMap::new)
-                    .insert(net_obj.clone(), input.clone());
+                inputs.push_input(net_obj.clone(), ordered_input.clone());
             } else {
                 warn!("Unknown client_id: {}", client_id);
             }
         }
     }
 
-    // Optionally, clean up old ticks beyond a certain limit
-    let max_ticks_to_keep = 10;
-    let oldest_tick_to_keep = tick.get().saturating_sub(max_ticks_to_keep);
-    inputs.0.retain(|t, _| t.get() >= oldest_tick_to_keep);
+    inputs.prune(10);
 }
 
 fn apply_inputs(
-    mut query: Query<(&mut Transform, &NetworkObject), With<Player>>,
+    mut query: Query<(&mut Transform, &NetworkObject, &mut LastInputTracker), With<Player>>,
     time: Res<Time>,
-    inputs: Res<ClientInputs>,
-    tick: Res<Tick>,
+    mut inputs: ResMut<ClientInputs>,
 ) {
-    for (mut transform, net_obj) in query.iter_mut() {
-        if let Some(input) = inputs.0.get(&*tick).and_then(|v| v.get(net_obj)) {
-            apply_input(input, &mut transform, &time);
+    let net_obj_inputs = inputs.pop_inputs();
+    for (mut transform, net_obj, mut last_input_tracker) in query.iter_mut() {
+        if let Some(input) = net_obj_inputs.get(net_obj) {
+            apply_input(&input.input, &mut transform, &time);
+            last_input_tracker.order = input.order;
         }
     }
 }

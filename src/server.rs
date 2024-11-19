@@ -14,12 +14,15 @@ use crate::{
     message::{
         self,
         client::ReliableMessageFromClient,
-        server::{MessageReaderOnServer, ReliableMessageFromServer},
+        server::{MessageReaderOnServer, ReliableMessageFromServer, TickSync},
         spawn::NetworkSpawn,
     },
     shared::{
         self, despawn_recursive_and_broadcast,
-        objects::{player::Player, Ball, NetworkObject},
+        objects::{
+            player::{LastInputTracker, Player},
+            Ball, NetworkObject,
+        },
         tick::{get_unix_millis, Tick},
         GameLogic,
     },
@@ -130,10 +133,10 @@ fn handle_ready_game(
             server.send_message(*client_id, DefaultChannel::ReliableUnordered, bytes);
             client_map.0.insert(*client_id, net_obj.clone());
 
-            let message = ReliableMessageFromServer::Tick {
+            let message = ReliableMessageFromServer::TickSync(TickSync {
                 tick: tick.get(),
                 unix_millis: get_unix_millis(),
-            };
+            });
             let bytes = bincode::serialize(&message).unwrap();
             server.send_message(*client_id, DefaultChannel::ReliableUnordered, bytes);
         }
@@ -143,7 +146,12 @@ fn handle_ready_game(
                 continue;
             };
             println!("spawning player and syncing game objects");
-            commands.spawn((Player, Transform::from_xyz(0.0, 1.0, 0.0), net_obj.clone()));
+            commands.spawn((
+                Player,
+                Transform::from_xyz(0.0, 1.0, 0.0),
+                net_obj.clone(),
+                LastInputTracker::default(),
+            ));
 
             for (net_obj, transform) in ball_query.iter() {
                 let spawn = NetworkSpawn::Ball(transform.clone());

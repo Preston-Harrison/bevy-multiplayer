@@ -245,8 +245,8 @@ fn set_local_player(
                 server_info.set_player_obj = true;
                 commands.insert_resource(LocalPlayer(net_obj.clone()));
             }
-            ReliableMessageFromServer::Tick { tick, unix_millis } => {
-                let tick = get_client_tick(*tick, *unix_millis);
+            ReliableMessageFromServer::TickSync(sync) => {
+                let tick = get_client_tick(sync.tick, sync.unix_millis);
                 println!("tick recv {}", tick.get());
                 commands.insert_resource(tick);
                 server_info.tick = true;

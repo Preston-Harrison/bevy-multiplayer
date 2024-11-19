@@ -29,6 +29,9 @@ pub enum AppState {
 pub enum GameLogic {
     Start,
     ReadInput,
+    /// Server will send tick adjustments here, client will read tick adjustments
+    /// here.
+    TickAdjust,
     /// Spawn and despawn.
     Spawn,
     Sync,
@@ -84,6 +87,7 @@ impl Plugin for Game {
             (
                 (
                     GameLogic::Start,
+                    GameLogic::TickAdjust,
                     GameLogic::ReadInput,
                     GameLogic::Spawn,
                     GameLogic::Sync,

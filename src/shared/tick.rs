@@ -1,7 +1,9 @@
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use super::GameLogic;
+use crate::message::{client::MessageReaderOnClient, server::ReliableMessageFromServer};
+
+use super::{ClientOnly, GameLogic};
 
 #[derive(Resource, Serialize, Deserialize, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Tick(u64);
@@ -22,7 +24,16 @@ pub struct TickPlugin {
 
 impl Plugin for TickPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(FixedUpdate, tick.in_set(GameLogic::Start));
+        app.add_systems(
+            FixedUpdate,
+            (
+                tick.in_set(GameLogic::Start),
+                recv_tick_update
+                    .in_set(ClientOnly)
+                    .in_set(GameLogic::Start)
+                    .after(tick),
+            ),
+        );
         if self.is_server {
             app.insert_resource(Tick::new(0));
         }
@@ -31,6 +42,14 @@ impl Plugin for TickPlugin {
 
 fn tick(mut tick: ResMut<Tick>) {
     tick.0 += 1;
+}
+
+fn recv_tick_update(reader: Res<MessageReaderOnClient>, mut curr_tick: ResMut<Tick>) {
+    for msg in reader.reliable_messages() {
+        if let ReliableMessageFromServer::TickSync(sync) = msg {
+            *curr_tick = get_client_tick(sync.tick, sync.unix_millis);
+        }
+    }
 }
 
 /// Returns the current Unix timestamp in milliseconds. Uses system time.

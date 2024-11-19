@@ -10,7 +10,7 @@ pub enum MessageSet {
 pub struct MessagesAvailable;
 
 pub mod client {
-    use crate::shared::{objects::player, tick::Tick, GameLogic};
+    use crate::shared::{objects::player, GameLogic};
 
     use super::{
         server::{ReliableMessageFromServer, UnreliableMessageFromServer},
@@ -174,9 +174,15 @@ pub mod client {
         ReadyForUpdates,
     }
 
+    #[derive(Serialize, Deserialize, Debug, Clone)]
+    pub struct OrderedInput {
+        pub input: player::Input,
+        pub order: u64,
+    }
+
     #[derive(Serialize, Deserialize, Debug)]
     pub enum UnreliableMessageFromClient {
-        Input(player::Input, Tick),
+        Input(OrderedInput),
     }
 }
 
@@ -194,17 +200,31 @@ pub mod server {
     };
 
     #[derive(Serialize, Deserialize, Debug)]
+    pub struct TickSync {
+        pub tick: u64,
+        pub unix_millis: u128,
+    }
+
+    #[derive(Serialize, Deserialize, Debug)]
     pub enum ReliableMessageFromServer {
         Spawn(NetworkObject, NetworkSpawn),
         Despawn(NetworkObject),
         SetPlayerNetworkObject(NetworkObject),
-        Tick { tick: u64, unix_millis: u128 },
+        TickSync(TickSync),
+    }
+
+    #[derive(Serialize, Deserialize, Debug)]
+    pub struct PlayerPositionSync {
+        pub net_obj: NetworkObject,
+        pub translation: Vec3,
+        pub tick: Tick,
+        pub last_input_order: u64,
     }
 
     #[derive(Serialize, Deserialize, Debug)]
     pub enum UnreliableMessageFromServer {
         TransformSync(NetworkObject, Transform, Tick),
-        PositionSync(NetworkObject, Vec3, Tick),
+        PlayerPositionSync(PlayerPositionSync),
     }
 
     #[derive(Resource)]
