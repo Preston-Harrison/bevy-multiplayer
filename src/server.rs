@@ -20,7 +20,7 @@ use crate::{
     shared::{
         self, despawn_recursive_and_broadcast,
         objects::{player::Player, Ball, NetworkObject},
-        tick::Tick,
+        tick::{get_unix_millis, Tick},
         GameLogic,
     },
 };
@@ -130,7 +130,10 @@ fn handle_ready_game(
             server.send_message(*client_id, DefaultChannel::ReliableUnordered, bytes);
             client_map.0.insert(*client_id, net_obj.clone());
 
-            let message = ReliableMessageFromServer::Tick(tick.get());
+            let message = ReliableMessageFromServer::Tick {
+                tick: tick.get(),
+                unix_millis: get_unix_millis(),
+            };
             let bytes = bincode::serialize(&message).unwrap();
             server.send_message(*client_id, DefaultChannel::ReliableUnordered, bytes);
         }

@@ -1,5 +1,3 @@
-use std::collections::VecDeque;
-
 use bevy::{input::mouse::MouseMotion, prelude::*, utils::HashMap};
 use bevy_renet::renet::{DefaultChannel, RenetClient, RenetServer};
 use serde::{Deserialize, Serialize};
@@ -11,10 +9,10 @@ use crate::{
         spawn::NetworkSpawn,
     },
     server::ClientNetworkObjectMap,
-    shared::{ClientOnly, GameLogic, ServerOnly},
+    shared::{tick::Tick, ClientOnly, GameLogic, ServerOnly},
 };
 
-use super::NetworkObject;
+use super::{LastSyncTracker, NetworkObject};
 
 #[derive(Resource)]
 pub struct LocalPlayer(pub NetworkObject);
@@ -24,11 +22,12 @@ pub struct Input {
     direction: Vec3,
 }
 
+/// `input_buffer.0[0]` is the newest input.
 #[derive(Resource, Default)]
-pub struct InputBuffer(VecDeque<Input>);
+pub struct InputBuffer(HashMap<Tick, Input>);
 
 #[derive(Resource, Default)]
-pub struct ClientInputs(HashMap<NetworkObject, Input>);
+pub struct ClientInputs(HashMap<Tick, HashMap<NetworkObject, Input>>);
 
 #[derive(Component)]
 pub struct Player;
@@ -49,8 +48,7 @@ impl Plugin for PlayerPlugin {
                 recv_player_data.in_set(ClientOnly).in_set(GameLogic::Sync),
                 read_input.in_set(ClientOnly).in_set(GameLogic::Start),
                 apply_inputs.in_set(ServerOnly).in_set(GameLogic::Game),
-                clear_inputs.in_set(ServerOnly).in_set(GameLogic::End),
-                read_inputs.in_set(ServerOnly).in_set(GameLogic::Input),
+                read_inputs.in_set(ServerOnly).in_set(GameLogic::ReadInput),
                 broadcast_player_data
                     .in_set(ServerOnly)
                     .in_set(GameLogic::Sync),
@@ -82,6 +80,7 @@ fn spawn_players(
     mut materials: ResMut<Assets<StandardMaterial>>,
     reader: Res<MessageReaderOnClient>,
     local_player: Res<LocalPlayer>,
+    tick: Res<Tick>,
 ) {
     for msg in reader.reliable_messages() {
         let ReliableMessageFromServer::Spawn(network_obj, network_spawn) = msg else {
@@ -96,6 +95,7 @@ fn spawn_players(
                 transform: *transform,
                 ..Default::default()
             })
+            .insert(LastSyncTracker::<Transform>::new(tick.clone()))
             .insert(network_obj.clone());
             if *network_obj == local_player.0 {
                 e.insert(LocalPlayerTag);
@@ -107,10 +107,14 @@ fn spawn_players(
 fn broadcast_player_data(
     query: Query<(&NetworkObject, &Transform), With<Player>>,
     mut server: ResMut<RenetServer>,
+    tick: Res<Tick>,
 ) {
     for (obj, transform) in query.iter() {
-        let message =
-            UnreliableMessageFromServer::PositionSync(obj.clone(), transform.translation.clone());
+        let message = UnreliableMessageFromServer::PositionSync(
+            obj.clone(),
+            transform.translation.clone(),
+            tick.clone(),
+        );
         let bytes = bincode::serialize(&message).unwrap();
         server.broadcast_message(DefaultChannel::Unreliable, bytes);
     }
@@ -118,16 +122,47 @@ fn broadcast_player_data(
 
 fn recv_player_data(
     reader: Res<MessageReaderOnClient>,
-    mut query: Query<(&mut Transform, &NetworkObject), With<Player>>,
+    mut query: Query<
+        (
+            &mut Transform,
+            &NetworkObject,
+            &mut LastSyncTracker<Transform>,
+        ),
+        With<Player>,
+    >,
+    local_player: Res<LocalPlayer>,
+    tick: Res<Tick>,
+    ibuf: Res<InputBuffer>,
+    time: Res<Time>,
 ) {
     for msg in reader.unreliable_messages() {
-        let UnreliableMessageFromServer::PositionSync(net_obj, net_translation) = msg else {
+        let UnreliableMessageFromServer::PositionSync(net_obj, net_translation, sync_tick) = msg
+        else {
             continue;
         };
-        for (mut transform, obj) in query.iter_mut() {
-            // TODO: rollback
-            if obj.id == net_obj.id {
+        for (mut transform, obj, mut last_sync_tracker) in query.iter_mut() {
+            if obj.id == net_obj.id && last_sync_tracker.last_tick < *sync_tick {
+                last_sync_tracker.last_tick = sync_tick.clone();
                 transform.translation = *net_translation;
+                if net_obj.id != local_player.0.id {
+                    continue;
+                }
+
+                if tick.get() <= last_sync_tracker.last_tick.get() {
+                    warn!(
+                        "got player sync tick in the future. current={}, sync={}",
+                        tick.get(),
+                        last_sync_tracker.last_tick.get()
+                    );
+                    continue;
+                }
+
+                let ticks = last_sync_tracker.last_tick.get()..=tick.get();
+                for i in ticks {
+                    if let Some(input) = &ibuf.0.get(&Tick::new(i)) {
+                        apply_input(input, &mut transform, &time);
+                    }
+                }
             }
         }
     }
@@ -138,6 +173,7 @@ fn read_input(
     mut ibuf: ResMut<InputBuffer>,
     query: Query<&Transform, With<LocalPlayerTag>>,
     mut client: ResMut<RenetClient>,
+    tick: Res<Tick>,
 ) {
     if let Ok(player_transform) = query.get_single() {
         let mut local_direction = Vec3::ZERO;
@@ -174,22 +210,25 @@ fn read_input(
         };
 
         if final_direction.length_squared() > 0.0 {
-            let message = UnreliableMessageFromClient::Input(Input {
-                direction: final_direction,
-            });
+            let message = UnreliableMessageFromClient::Input(
+                Input {
+                    direction: final_direction,
+                },
+                tick.clone(),
+            );
             let bytes = bincode::serialize(&message).unwrap();
             client.send_message(DefaultChannel::Unreliable, bytes);
+            ibuf.0.insert(
+                tick.clone(),
+                Input {
+                    direction: final_direction,
+                },
+            );
         }
 
-        // Only push if there's movement
-        ibuf.0.push_back(Input {
-            direction: final_direction,
-        });
-
-        // Optional: Limit buffer size
-        if ibuf.0.len() > 10 {
-            ibuf.0.pop_front();
-        }
+        let max_ticks_to_keep = 100;
+        let oldest_tick_to_keep = tick.get().saturating_sub(max_ticks_to_keep);
+        ibuf.0.retain(|t, _| t.get() >= oldest_tick_to_keep);
     }
 }
 
@@ -197,24 +236,38 @@ fn read_inputs(
     mut inputs: ResMut<ClientInputs>,
     reader: Res<server::MessageReaderOnServer>,
     client_netmap: Res<ClientNetworkObjectMap>,
+    tick: Res<Tick>,
 ) {
     for (client_id, msg) in reader.unreliable_messages() {
-        let UnreliableMessageFromClient::Input(input) = msg else {
-            continue;
-        };
-        if let Some(net_obj) = client_netmap.0.get(client_id) {
-            inputs.0.insert(net_obj.clone(), input.clone());
+        if let UnreliableMessageFromClient::Input(input, input_tick) = msg {
+            // Map the client ID to the player's NetworkObject
+            if let Some(net_obj) = client_netmap.0.get(client_id) {
+                // Insert the input into the HashMap for the specific tick
+                inputs
+                    .0
+                    .entry(input_tick.clone())
+                    .or_insert_with(HashMap::new)
+                    .insert(net_obj.clone(), input.clone());
+            } else {
+                warn!("Unknown client_id: {}", client_id);
+            }
         }
     }
+
+    // Optionally, clean up old ticks beyond a certain limit
+    let max_ticks_to_keep = 10;
+    let oldest_tick_to_keep = tick.get().saturating_sub(max_ticks_to_keep);
+    inputs.0.retain(|t, _| t.get() >= oldest_tick_to_keep);
 }
 
 fn apply_inputs(
     mut query: Query<(&mut Transform, &NetworkObject), With<Player>>,
     time: Res<Time>,
     inputs: Res<ClientInputs>,
+    tick: Res<Tick>,
 ) {
     for (mut transform, net_obj) in query.iter_mut() {
-        if let Some(input) = inputs.0.get(net_obj) {
+        if let Some(input) = inputs.0.get(&*tick).and_then(|v| v.get(net_obj)) {
             apply_input(input, &mut transform, &time);
         }
     }
@@ -222,10 +275,6 @@ fn apply_inputs(
 
 fn apply_input(input: &Input, transform: &mut Transform, time: &Time) {
     transform.translation += input.direction * 5.0 * time.delta_seconds();
-}
-
-fn clear_inputs(mut inputs: ResMut<ClientInputs>) {
-    inputs.0.clear();
 }
 
 fn rotate_player(

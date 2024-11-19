@@ -10,7 +10,7 @@ pub enum MessageSet {
 pub struct MessagesAvailable;
 
 pub mod client {
-    use crate::shared::{objects::player, GameLogic};
+    use crate::shared::{objects::player, tick::Tick, GameLogic};
 
     use super::{
         server::{ReliableMessageFromServer, UnreliableMessageFromServer},
@@ -176,7 +176,7 @@ pub mod client {
 
     #[derive(Serialize, Deserialize, Debug)]
     pub enum UnreliableMessageFromClient {
-        Input(player::Input),
+        Input(player::Input, Tick),
     }
 }
 
@@ -185,7 +185,7 @@ pub mod server {
     use bevy_renet::renet::{ClientId, DefaultChannel, RenetServer};
     use serde::{Deserialize, Serialize};
 
-    use crate::shared::{objects::NetworkObject, GameLogic};
+    use crate::shared::{objects::NetworkObject, tick::Tick, GameLogic};
 
     use super::{
         client::{ReliableMessageFromClient, UnreliableMessageFromClient},
@@ -198,13 +198,13 @@ pub mod server {
         Spawn(NetworkObject, NetworkSpawn),
         Despawn(NetworkObject),
         SetPlayerNetworkObject(NetworkObject),
-        Tick(u64),
+        Tick { tick: u64, unix_millis: u128 },
     }
 
     #[derive(Serialize, Deserialize, Debug)]
     pub enum UnreliableMessageFromServer {
-        TransformSync(NetworkObject, Transform),
-        PositionSync(NetworkObject, Vec3),
+        TransformSync(NetworkObject, Transform, Tick),
+        PositionSync(NetworkObject, Vec3, Tick),
     }
 
     #[derive(Resource)]

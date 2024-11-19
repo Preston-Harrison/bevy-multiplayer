@@ -28,10 +28,10 @@ pub enum AppState {
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub enum GameLogic {
     Start,
+    ReadInput,
     /// Spawn and despawn.
     Spawn,
     Sync,
-    Input,
     Game,
     End,
 }
@@ -84,9 +84,9 @@ impl Plugin for Game {
             (
                 (
                     GameLogic::Start,
+                    GameLogic::ReadInput,
                     GameLogic::Spawn,
                     GameLogic::Sync,
-                    GameLogic::Input,
                     GameLogic::Game,
                     GameLogic::End,
                 )

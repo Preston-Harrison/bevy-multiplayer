@@ -12,7 +12,7 @@ use crate::message::server::ReliableMessageFromServer;
 use crate::message::MessagesAvailable;
 use crate::shared::objects::player::{LocalPlayer, Player};
 use crate::shared::objects::NetworkObject;
-use crate::shared::tick::Tick;
+use crate::shared::tick::get_client_tick;
 use crate::shared::AppState;
 use crate::{message, shared};
 
@@ -50,7 +50,7 @@ pub fn run() {
         .add_plugins((shared::Game, shared::tick::TickPlugin { is_server: false }))
         .add_plugins(message::client::ClientMessagePlugin {
             latency: Some(0.2),
-            message_loss: Some(0.05),
+            message_loss: None,
         })
         .run();
 }
@@ -245,9 +245,10 @@ fn set_local_player(
                 server_info.set_player_obj = true;
                 commands.insert_resource(LocalPlayer(net_obj.clone()));
             }
-            ReliableMessageFromServer::Tick(tick) => {
-                commands.insert_resource(Tick::new(*tick));
-                println!("tick recv {tick}");
+            ReliableMessageFromServer::Tick { tick, unix_millis } => {
+                let tick = get_client_tick(*tick, *unix_millis);
+                println!("tick recv {}", tick.get());
+                commands.insert_resource(tick);
                 server_info.tick = true;
             }
             _ => {}
