@@ -6,12 +6,8 @@ use rand::Rng;
 
 use crate::message::{client::MessageReaderOnClient, server::ReliableMessageFromServer};
 
-use self::{
-    cond::{run_if_is_client, run_if_is_server},
-    objects::{player::PlayerPlugin, Ball, BallPlugin, NetworkObject},
-};
+use self::objects::{player::PlayerPlugin, Ball, BallPlugin, NetworkObject};
 
-pub mod cond;
 pub mod objects;
 pub mod render;
 pub mod scenes;
@@ -39,12 +35,6 @@ pub enum GameLogic {
     End,
 }
 
-#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ClientOnly;
-
-#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ServerOnly;
-
 fn despawn(
     reader: Res<MessageReaderOnClient>,
     mut commands: Commands,
@@ -63,42 +53,43 @@ fn despawn(
     }
 }
 
-pub struct Game;
+pub struct Game {
+    pub is_server: bool,
+}
 
 impl Plugin for Game {
     fn build(&self, app: &mut App) {
-        app.add_systems(
-            FixedUpdate,
-            despawn.in_set(ClientOnly).in_set(GameLogic::Spawn),
-        );
-        app.add_plugins((BallPlugin, PlayerPlugin));
+        app.add_plugins((
+            BallPlugin {
+                is_server: self.is_server,
+            },
+            PlayerPlugin {
+                is_server: self.is_server,
+            },
+        ));
         app.insert_resource(RandomBallTimer(Timer::new(
             Duration::from_secs(10),
             TimerMode::Repeating,
         )));
-        app.add_systems(
-            FixedUpdate,
-            spawn_random_balls
-                .in_set(ServerOnly)
-                .in_set(GameLogic::Game),
-        );
+
+        if self.is_server {
+            app.add_systems(FixedUpdate, spawn_random_balls.in_set(GameLogic::Game));
+        } else {
+            app.add_systems(FixedUpdate, despawn.in_set(GameLogic::Spawn));
+        }
         app.configure_sets(
             FixedUpdate,
-            (
-                (
-                    GameLogic::Start,
-                    GameLogic::TickAdjust,
-                    GameLogic::ReadInput,
-                    GameLogic::Spawn,
-                    GameLogic::Sync,
-                    GameLogic::Game,
-                    GameLogic::End,
-                )
-                    .chain()
-                    .run_if(in_state(AppState::InGame)),
-                ClientOnly.run_if(run_if_is_client),
-                ServerOnly.run_if(run_if_is_server),
-            ),
+            ((
+                GameLogic::Start,
+                GameLogic::TickAdjust,
+                GameLogic::ReadInput,
+                GameLogic::Spawn,
+                GameLogic::Sync,
+                GameLogic::Game,
+                GameLogic::End,
+            )
+                .chain()
+                .run_if(in_state(AppState::InGame)),),
         );
     }
 }

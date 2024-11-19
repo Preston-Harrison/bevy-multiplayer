@@ -14,7 +14,7 @@ use crate::{
     message::{
         self,
         client::ReliableMessageFromClient,
-        server::{MessageReaderOnServer, ReliableMessageFromServer, TickSync},
+        server::{MessageReaderOnServer, ReliableMessageFromServer, Spawn, TickSync},
         spawn::NetworkSpawn,
     },
     shared::{
@@ -29,6 +29,7 @@ use crate::{
 };
 
 pub fn run() {
+    let is_server = true;
     App::new()
         .add_plugins((DefaultPlugins, Server))
         .add_systems(Startup, setup)
@@ -37,9 +38,9 @@ pub fn run() {
             (handle_server_events, handle_ready_game).in_set(GameLogic::Sync),
         )
         .add_plugins((
-            shared::Game,
+            shared::Game { is_server },
+            shared::tick::TickPlugin { is_server },
             message::server::ServerMessagePlugin,
-            shared::tick::TickPlugin { is_server: true },
         ))
         .insert_state(shared::AppState::InGame)
         .run();
@@ -154,16 +155,24 @@ fn handle_ready_game(
             ));
 
             for (net_obj, transform) in ball_query.iter() {
-                let spawn = NetworkSpawn::Ball(transform.clone());
-                let message = ReliableMessageFromServer::Spawn(net_obj.clone(), spawn);
+                let net_spawn = NetworkSpawn::Ball(transform.clone());
+                let message = ReliableMessageFromServer::Spawn(Spawn {
+                    net_obj: net_obj.clone(),
+                    tick: tick.clone(),
+                    net_spawn,
+                });
                 let bytes = bincode::serialize(&message).unwrap();
                 server.send_message(*client_id, DefaultChannel::ReliableUnordered, bytes);
             }
 
             // Won't include player just spawned.
             for (net_obj, transform) in player_query.iter() {
-                let spawn = NetworkSpawn::Player(transform.clone());
-                let message = ReliableMessageFromServer::Spawn(net_obj.clone(), spawn);
+                let net_spawn = NetworkSpawn::Player(transform.clone());
+                let message = ReliableMessageFromServer::Spawn(Spawn {
+                    net_obj: net_obj.clone(),
+                    tick: tick.clone(),
+                    net_spawn,
+                });
                 let bytes = bincode::serialize(&message).unwrap();
                 server.send_message(*client_id, DefaultChannel::ReliableUnordered, bytes);
             }

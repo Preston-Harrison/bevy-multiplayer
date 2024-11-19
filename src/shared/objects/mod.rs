@@ -10,7 +10,7 @@ use bevy_renet::renet::{DefaultChannel, RenetServer};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 
-use super::{tick::Tick, ClientOnly, GameLogic, ServerOnly};
+use super::{tick::Tick, GameLogic};
 
 pub mod player;
 
@@ -45,19 +45,23 @@ impl NetworkObject {
 #[derive(Component)]
 pub struct Ball;
 
-pub struct BallPlugin;
+pub struct BallPlugin {
+    pub is_server: bool,
+}
 
 impl Plugin for BallPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
-            FixedUpdate,
-            (
-                broadcast_ball_spawns.in_set(ServerOnly),
-                spawn_balls.in_set(ClientOnly).in_set(GameLogic::Spawn),
-                broadcast_ball_data.in_set(ServerOnly),
-                recv_ball_data.in_set(ClientOnly).in_set(GameLogic::Sync),
-            ),
-        );
+        if self.is_server {
+            app.add_systems(FixedUpdate, (broadcast_ball_spawns, broadcast_ball_data));
+        } else {
+            app.add_systems(
+                FixedUpdate,
+                (
+                    spawn_balls.in_set(GameLogic::Spawn),
+                    recv_ball_data.in_set(GameLogic::Sync),
+                ),
+            );
+        }
     }
 }
 

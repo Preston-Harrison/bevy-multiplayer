@@ -13,7 +13,7 @@ use crate::{
         spawn::NetworkSpawn,
     },
     server::ClientNetworkObjectMap,
-    shared::{tick::Tick, ClientOnly, GameLogic, ServerOnly},
+    shared::{tick::Tick, GameLogic},
 };
 
 use super::{LastSyncTracker, NetworkObject};
@@ -112,29 +112,35 @@ pub struct LastInputTracker {
 #[derive(Component)]
 pub struct LocalPlayerTag;
 
-pub struct PlayerPlugin;
+pub struct PlayerPlugin {
+    pub is_server: bool,
+}
 
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(ClientInputs::default());
         app.insert_resource(InputBuffer::default());
-        app.add_systems(
-            FixedUpdate,
-            (
-                spawn_players.in_set(ClientOnly).in_set(GameLogic::Spawn),
-                recv_player_data.in_set(ClientOnly).in_set(GameLogic::Sync),
-                read_input.in_set(ClientOnly).in_set(GameLogic::Start),
-                apply_inputs.in_set(ServerOnly).in_set(GameLogic::Game),
-                read_inputs.in_set(ServerOnly).in_set(GameLogic::ReadInput),
-                broadcast_player_data
-                    .in_set(ServerOnly)
-                    .in_set(GameLogic::Sync),
-                broadcast_player_spawns
-                    .in_set(ServerOnly)
-                    .in_set(GameLogic::Sync),
-            ),
-        );
-        app.add_systems(Update, rotate_player.in_set(ClientOnly));
+        if self.is_server {
+            app.add_systems(
+                FixedUpdate,
+                (
+                    apply_inputs.in_set(GameLogic::Game),
+                    read_inputs.in_set(GameLogic::ReadInput),
+                    broadcast_player_data.in_set(GameLogic::Sync),
+                    broadcast_player_spawns.in_set(GameLogic::Sync),
+                ),
+            );
+        } else {
+            app.add_systems(
+                FixedUpdate,
+                (
+                    spawn_players.in_set(GameLogic::Spawn),
+                    recv_player_data.in_set(GameLogic::Sync),
+                    read_input.in_set(GameLogic::Start),
+                ),
+            );
+            app.add_systems(Update, rotate_player);
+        }
     }
 }
 

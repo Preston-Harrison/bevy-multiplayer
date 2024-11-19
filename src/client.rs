@@ -27,6 +27,7 @@ enum LoadState {
 }
 
 pub fn run() {
+    let is_server = false;
     App::new()
         .add_plugins((DefaultPlugins, Client))
         .insert_state(LoadState::Init)
@@ -47,7 +48,10 @@ pub fn run() {
         )
         .insert_state(shared::AppState::MainMenu)
         .insert_resource(ServerInfoReceived::default())
-        .add_plugins((shared::Game, shared::tick::TickPlugin { is_server: false }))
+        .add_plugins((
+            shared::Game { is_server },
+            shared::tick::TickPlugin { is_server },
+        ))
         .add_plugins(message::client::ClientMessagePlugin {
             latency: Some(0.2),
             message_loss: None,

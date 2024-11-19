@@ -9,7 +9,7 @@ use crate::message::{
     server::{ReliableMessageFromServer, TickSync},
 };
 
-use super::{ClientOnly, GameLogic, ServerOnly};
+use super::GameLogic;
 
 #[derive(Resource, Serialize, Deserialize, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Tick(u64);
@@ -39,23 +39,19 @@ pub struct TickPlugin {
 
 impl Plugin for TickPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
-            FixedUpdate,
-            (
-                tick.in_set(GameLogic::Start),
-                recv_tick_update
-                    .in_set(ClientOnly)
-                    .in_set(GameLogic::Start)
-                    .after(tick),
-                send_tick_update
-                    .in_set(ServerOnly)
-                    .in_set(GameLogic::Start)
-                    .after(tick),
-            ),
-        );
+        app.add_systems(FixedUpdate, (tick.in_set(GameLogic::Start),));
         if self.is_server {
             app.insert_resource(Tick::new(0));
             app.insert_resource(TickTimer::default());
+            app.add_systems(
+                FixedUpdate,
+                send_tick_update.in_set(GameLogic::Start).after(tick),
+            );
+        } else {
+            app.add_systems(
+                FixedUpdate,
+                recv_tick_update.in_set(GameLogic::Start).after(tick),
+            );
         }
     }
 }
