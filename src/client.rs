@@ -12,6 +12,7 @@ use crate::message::server::ReliableMessageFromServer;
 use crate::message::MessagesAvailable;
 use crate::shared::objects::player::{LocalPlayer, Player};
 use crate::shared::objects::NetworkObject;
+use crate::shared::tick::Tick;
 use crate::shared::AppState;
 use crate::{message, shared};
 
@@ -45,7 +46,8 @@ pub fn run() {
                 .in_set(MessagesAvailable),
         )
         .insert_state(shared::AppState::MainMenu)
-        .add_plugins(shared::Game)
+        .insert_resource(ServerInfoReceived::default())
+        .add_plugins((shared::Game, shared::tick::TickPlugin { is_server: false }))
         .add_plugins(message::client::ClientMessagePlugin {
             latency: Some(0.2),
             message_loss: Some(0.05),
@@ -213,25 +215,50 @@ fn send_ready(mut load_state: ResMut<NextState<LoadState>>, client: Option<ResMu
     }
 }
 
+#[derive(Resource, Default)]
+pub struct ServerInfoReceived {
+    set_player_obj: bool,
+    tick: bool,
+}
+
+impl ServerInfoReceived {
+    fn all(&self) -> bool {
+        self.set_player_obj && self.tick
+    }
+}
+
 fn set_local_player(
     mut commands: Commands,
     reader: Res<MessageReaderOnClient>,
     client: Option<ResMut<RenetClient>>,
     mut app_state: ResMut<NextState<AppState>>,
     mut load_state: ResMut<NextState<LoadState>>,
+    mut server_info: ResMut<ServerInfoReceived>,
 ) {
     let Some(mut client) = client else {
         return;
     };
     for msg in reader.reliable_messages() {
-        if let ReliableMessageFromServer::SetPlayerNetworkObject(net_obj) = msg {
-            println!("set local player");
-            commands.insert_resource(LocalPlayer(net_obj.clone()));
-            let message = ReliableMessageFromClient::ReadyForUpdates;
-            let bytes = bincode::serialize(&message).unwrap();
-            client.send_message(DefaultChannel::ReliableUnordered, bytes);
-            app_state.set(AppState::InGame);
-            load_state.set(LoadState::WaitingForPlayerSpawn);
+        match msg {
+            ReliableMessageFromServer::SetPlayerNetworkObject(net_obj) => {
+                println!("set local player");
+                server_info.set_player_obj = true;
+                commands.insert_resource(LocalPlayer(net_obj.clone()));
+            }
+            ReliableMessageFromServer::Tick(tick) => {
+                commands.insert_resource(Tick::new(*tick));
+                println!("tick recv {tick}");
+                server_info.tick = true;
+            }
+            _ => {}
         }
+    }
+
+    if server_info.all() {
+        let message = ReliableMessageFromClient::ReadyForUpdates;
+        let bytes = bincode::serialize(&message).unwrap();
+        client.send_message(DefaultChannel::ReliableUnordered, bytes);
+        app_state.set(AppState::InGame);
+        load_state.set(LoadState::WaitingForPlayerSpawn);
     }
 }

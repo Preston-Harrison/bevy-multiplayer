@@ -20,6 +20,7 @@ use crate::{
     shared::{
         self, despawn_recursive_and_broadcast,
         objects::{player::Player, Ball, NetworkObject},
+        tick::Tick,
         GameLogic,
     },
 };
@@ -32,7 +33,11 @@ pub fn run() {
             FixedUpdate,
             (handle_server_events, handle_ready_game).in_set(GameLogic::Sync),
         )
-        .add_plugins((shared::Game, message::server::ServerMessagePlugin))
+        .add_plugins((
+            shared::Game,
+            message::server::ServerMessagePlugin,
+            shared::tick::TickPlugin { is_server: true },
+        ))
         .insert_state(shared::AppState::InGame)
         .run();
 }
@@ -110,6 +115,7 @@ fn handle_ready_game(
     player_query: Query<(&NetworkObject, &Transform), With<Player>>,
     mut client_map: ResMut<ClientNetworkObjectMap>,
     mut commands: Commands,
+    tick: Res<Tick>,
 ) {
     for (client_id, msg) in reader.reliable_messages() {
         if *msg == ReliableMessageFromClient::Connected {
@@ -123,6 +129,10 @@ fn handle_ready_game(
             let bytes = bincode::serialize(&message).unwrap();
             server.send_message(*client_id, DefaultChannel::ReliableUnordered, bytes);
             client_map.0.insert(*client_id, net_obj.clone());
+
+            let message = ReliableMessageFromServer::Tick(tick.get());
+            let bytes = bincode::serialize(&message).unwrap();
+            server.send_message(*client_id, DefaultChannel::ReliableUnordered, bytes);
         }
         if *msg == ReliableMessageFromClient::ReadyForUpdates {
             let Some(net_obj) = client_map.0.get(client_id) else {

@@ -27,13 +27,13 @@ pub enum AppState {
 
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub enum GameLogic {
-    Read,
+    Start,
     /// Spawn and despawn.
     Spawn,
     Sync,
     Input,
     Game,
-    Clear,
+    End,
 }
 
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
@@ -64,7 +64,10 @@ pub struct Game;
 
 impl Plugin for Game {
     fn build(&self, app: &mut App) {
-        app.add_systems(FixedUpdate, despawn.in_set(ClientOnly).in_set(GameLogic::Spawn));
+        app.add_systems(
+            FixedUpdate,
+            despawn.in_set(ClientOnly).in_set(GameLogic::Spawn),
+        );
         app.add_plugins((BallPlugin, PlayerPlugin));
         app.insert_resource(RandomBallTimer(Timer::new(
             Duration::from_secs(10),
@@ -80,12 +83,12 @@ impl Plugin for Game {
             FixedUpdate,
             (
                 (
-                    GameLogic::Read,
+                    GameLogic::Start,
                     GameLogic::Spawn,
                     GameLogic::Sync,
                     GameLogic::Input,
                     GameLogic::Game,
-                    GameLogic::Clear,
+                    GameLogic::End,
                 )
                     .chain()
                     .run_if(in_state(AppState::InGame)),

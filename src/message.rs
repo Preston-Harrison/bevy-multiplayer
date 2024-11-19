@@ -67,13 +67,16 @@ pub mod client {
     impl Plugin for ClientMessagePlugin {
         fn build(&self, app: &mut App) {
             app.insert_resource(MessageReaderOnClient::new(self.latency, self.message_loss))
-                .add_systems(FixedUpdate, read_messages_from_server.in_set(MessageSet::Read))
+                .add_systems(
+                    FixedUpdate,
+                    read_messages_from_server.in_set(MessageSet::Read),
+                )
                 .add_systems(FixedUpdate, clear_messages.in_set(MessageSet::Clear));
             app.configure_sets(
                 FixedUpdate,
                 (
-                    MessageSet::Read.before(GameLogic::Read),
-                    MessageSet::Clear.after(GameLogic::Clear),
+                    MessageSet::Read.before(GameLogic::Start),
+                    MessageSet::Clear.after(GameLogic::End),
                     MessagesAvailable
                         .after(MessageSet::Read)
                         .before(MessageSet::Clear),
@@ -195,6 +198,7 @@ pub mod server {
         Spawn(NetworkObject, NetworkSpawn),
         Despawn(NetworkObject),
         SetPlayerNetworkObject(NetworkObject),
+        Tick(u64),
     }
 
     #[derive(Serialize, Deserialize, Debug)]
@@ -231,13 +235,16 @@ pub mod server {
     impl Plugin for ServerMessagePlugin {
         fn build(&self, app: &mut App) {
             app.insert_resource(MessageReaderOnServer::new())
-                .add_systems(FixedUpdate, read_messages_from_clients.in_set(MessageSet::Read))
+                .add_systems(
+                    FixedUpdate,
+                    read_messages_from_clients.in_set(MessageSet::Read),
+                )
                 .add_systems(FixedUpdate, clear_messages.after(MessageSet::Clear));
             app.configure_sets(
                 FixedUpdate,
                 (
-                    MessageSet::Read.before(GameLogic::Read),
-                    MessageSet::Clear.after(GameLogic::Clear),
+                    MessageSet::Read.before(GameLogic::Start),
+                    MessageSet::Clear.after(GameLogic::End),
                     MessagesAvailable
                         .after(MessageSet::Read)
                         .before(MessageSet::Clear),

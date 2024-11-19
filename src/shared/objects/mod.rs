@@ -39,7 +39,7 @@ impl Plugin for BallPlugin {
                 spawn_balls.in_set(ClientOnly).in_set(GameLogic::Spawn),
                 broadcast_ball_data.in_set(ServerOnly),
                 recv_ball_data.in_set(ClientOnly).in_set(GameLogic::Sync),
-            )
+            ),
         );
     }
 }

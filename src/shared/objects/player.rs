@@ -47,9 +47,9 @@ impl Plugin for PlayerPlugin {
             (
                 spawn_players.in_set(ClientOnly).in_set(GameLogic::Spawn),
                 recv_player_data.in_set(ClientOnly).in_set(GameLogic::Sync),
-                read_input.in_set(ClientOnly).in_set(GameLogic::Read),
+                read_input.in_set(ClientOnly).in_set(GameLogic::Start),
                 apply_inputs.in_set(ServerOnly).in_set(GameLogic::Game),
-                clear_inputs.in_set(ServerOnly).in_set(GameLogic::Clear),
+                clear_inputs.in_set(ServerOnly).in_set(GameLogic::End),
                 read_inputs.in_set(ServerOnly).in_set(GameLogic::Input),
                 broadcast_player_data
                     .in_set(ServerOnly)
