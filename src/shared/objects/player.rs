@@ -12,11 +12,44 @@ use crate::{
         },
         spawn::NetworkSpawn,
     },
-    server::ClientNetworkObjectMap,
+    server::{ClientNetworkObjectMap, PlayerLoaded},
     shared::{tick::Tick, GameLogic},
 };
 
 use super::{LastSyncTracker, NetworkObject};
+
+pub struct PlayerPlugin {
+    pub is_server: bool,
+}
+
+impl Plugin for PlayerPlugin {
+    fn build(&self, app: &mut App) {
+        app.insert_resource(ClientInputs::default());
+        app.insert_resource(InputBuffer::default());
+        if self.is_server {
+            app.add_systems(
+                FixedUpdate,
+                (
+                    apply_inputs.in_set(GameLogic::Game),
+                    read_inputs.in_set(GameLogic::ReadInput),
+                    broadcast_player_data.in_set(GameLogic::Sync),
+                    broadcast_player_spawns.in_set(GameLogic::Sync),
+                    load_player.in_set(GameLogic::Sync),
+                ),
+            );
+        } else {
+            app.add_systems(
+                FixedUpdate,
+                (
+                    spawn_players.in_set(GameLogic::Spawn),
+                    recv_player_data.in_set(GameLogic::Sync),
+                    read_input.in_set(GameLogic::Start),
+                ),
+            );
+            app.add_systems(Update, rotate_player);
+        }
+    }
+}
 
 #[derive(Resource)]
 pub struct LocalPlayer(pub NetworkObject);
@@ -111,38 +144,6 @@ pub struct LastInputTracker {
 
 #[derive(Component)]
 pub struct LocalPlayerTag;
-
-pub struct PlayerPlugin {
-    pub is_server: bool,
-}
-
-impl Plugin for PlayerPlugin {
-    fn build(&self, app: &mut App) {
-        app.insert_resource(ClientInputs::default());
-        app.insert_resource(InputBuffer::default());
-        if self.is_server {
-            app.add_systems(
-                FixedUpdate,
-                (
-                    apply_inputs.in_set(GameLogic::Game),
-                    read_inputs.in_set(GameLogic::ReadInput),
-                    broadcast_player_data.in_set(GameLogic::Sync),
-                    broadcast_player_spawns.in_set(GameLogic::Sync),
-                ),
-            );
-        } else {
-            app.add_systems(
-                FixedUpdate,
-                (
-                    spawn_players.in_set(GameLogic::Spawn),
-                    recv_player_data.in_set(GameLogic::Sync),
-                    read_input.in_set(GameLogic::Start),
-                ),
-            );
-            app.add_systems(Update, rotate_player);
-        }
-    }
-}
 
 fn broadcast_player_spawns(
     query: Query<(&NetworkObject, &Transform), Added<Player>>,
@@ -347,5 +348,33 @@ fn rotate_player(
         // Order of rotations is important, see <https://gamedev.stackexchange.com/a/136175/103059>
         transform.rotate_y(yaw);
         transform.rotate_local_x(pitch);
+    }
+}
+
+fn load_player(
+    mut player_load: EventReader<PlayerLoaded>,
+    player_query: Query<(&NetworkObject, &Transform), With<Player>>,
+    tick: Res<Tick>,
+    mut server: ResMut<RenetServer>,
+    mut commands: Commands,
+) {
+    for load in player_load.read() {
+        commands.spawn((
+            Player,
+            Transform::from_xyz(0.0, 1.0, 0.0),
+            load.net_obj.clone(),
+            LastInputTracker::default(),
+        ));
+
+        for (net_obj, transform) in player_query.iter() {
+            let net_spawn = NetworkSpawn::Player(transform.clone());
+            let message = ReliableMessageFromServer::Spawn(Spawn {
+                net_obj: net_obj.clone(),
+                tick: tick.clone(),
+                net_spawn,
+            });
+            let bytes = bincode::serialize(&message).unwrap();
+            server.send_message(load.client_id, DefaultChannel::ReliableUnordered, bytes);
+        }
     }
 }

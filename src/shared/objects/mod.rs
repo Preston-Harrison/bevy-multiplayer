@@ -1,12 +1,12 @@
-use std::marker::PhantomData;
 use bevy::prelude::*;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
+use std::marker::PhantomData;
 
 use super::tick::Tick;
 
-pub mod player;
 pub mod ball;
+pub mod player;
 
 #[derive(Serialize, Deserialize, Component, Clone, Debug, Hash, PartialEq, Eq)]
 pub struct NetworkObject {
@@ -35,4 +35,3 @@ impl NetworkObject {
         Self { id: random_number }
     }
 }
-

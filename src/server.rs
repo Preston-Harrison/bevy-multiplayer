@@ -14,15 +14,11 @@ use crate::{
     message::{
         self,
         client::ReliableMessageFromClient,
-        server::{MessageReaderOnServer, ReliableMessageFromServer, Spawn, TickSync},
-        spawn::NetworkSpawn,
+        server::{MessageReaderOnServer, ReliableMessageFromServer, TickSync},
     },
     shared::{
         self, despawn_recursive_and_broadcast,
-        objects::{
-            player::{LastInputTracker, Player},
-            ball::Ball, NetworkObject,
-        },
+        objects::{player::Player, NetworkObject},
         tick::{get_unix_millis, Tick},
         GameLogic,
     },
@@ -43,6 +39,7 @@ pub fn run() {
             message::server::ServerMessagePlugin,
         ))
         .insert_state(shared::AppState::InGame)
+        .add_event::<PlayerLoaded>()
         .run();
 }
 
@@ -112,14 +109,18 @@ fn handle_server_events(
     }
 }
 
+#[derive(Event)]
+pub struct PlayerLoaded {
+    pub client_id: ClientId,
+    pub net_obj: NetworkObject,
+}
+
 fn handle_ready_game(
     mut server: ResMut<RenetServer>,
     reader: Res<MessageReaderOnServer>,
-    ball_query: Query<(&NetworkObject, &Transform), With<Ball>>,
-    player_query: Query<(&NetworkObject, &Transform), With<Player>>,
     mut client_map: ResMut<ClientNetworkObjectMap>,
-    mut commands: Commands,
     tick: Res<Tick>,
+    mut player_loaded: EventWriter<PlayerLoaded>,
 ) {
     for (client_id, msg) in reader.reliable_messages() {
         if *msg == ReliableMessageFromClient::Connected {
@@ -146,36 +147,10 @@ fn handle_ready_game(
                 println!("ready called twice");
                 continue;
             };
-            println!("spawning player and syncing game objects");
-            commands.spawn((
-                Player,
-                Transform::from_xyz(0.0, 1.0, 0.0),
-                net_obj.clone(),
-                LastInputTracker::default(),
-            ));
-
-            for (net_obj, transform) in ball_query.iter() {
-                let net_spawn = NetworkSpawn::Ball(transform.clone());
-                let message = ReliableMessageFromServer::Spawn(Spawn {
-                    net_obj: net_obj.clone(),
-                    tick: tick.clone(),
-                    net_spawn,
-                });
-                let bytes = bincode::serialize(&message).unwrap();
-                server.send_message(*client_id, DefaultChannel::ReliableUnordered, bytes);
-            }
-
-            // Won't include player just spawned.
-            for (net_obj, transform) in player_query.iter() {
-                let net_spawn = NetworkSpawn::Player(transform.clone());
-                let message = ReliableMessageFromServer::Spawn(Spawn {
-                    net_obj: net_obj.clone(),
-                    tick: tick.clone(),
-                    net_spawn,
-                });
-                let bytes = bincode::serialize(&message).unwrap();
-                server.send_message(*client_id, DefaultChannel::ReliableUnordered, bytes);
-            }
+            player_loaded.send(PlayerLoaded {
+                client_id: *client_id,
+                net_obj: net_obj.clone(),
+            });
         }
     }
 }

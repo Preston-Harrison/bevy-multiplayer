@@ -6,6 +6,7 @@ use crate::{
         server::{ReliableMessageFromServer, Spawn, UnreliableMessageFromServer},
         spawn::NetworkSpawn,
     },
+    server::PlayerLoaded,
     shared::{despawn_recursive_and_broadcast, tick::Tick, GameLogic},
 };
 use bevy::prelude::*;
@@ -34,6 +35,7 @@ impl Plugin for BallPlugin {
                     broadcast_ball_spawns.in_set(GameLogic::Spawn),
                     broadcast_ball_data.in_set(GameLogic::Sync),
                     spawn_random_balls.in_set(GameLogic::Game),
+                    load_balls.in_set(GameLogic::Sync),
                 ),
             );
         } else {
@@ -149,12 +151,9 @@ fn spawn_random_balls(
     mut server: ResMut<RenetServer>,
 ) {
     if timer.0.tick(time.delta()).finished() {
-        let mut despawns = 0;
         for (entity, obj, _, _) in balls.iter() {
-            despawns += 1;
             despawn_recursive_and_broadcast(&mut server, &mut commands, entity, obj.clone());
         }
-        println!("spawning random balls, despawning {despawns}");
         random_balls(commands);
     } else {
         for (_, _, mut transform, move_up) in balls.iter_mut() {
@@ -183,3 +182,22 @@ fn random_balls(mut commands: Commands) {
     }
 }
 
+fn load_balls(
+    mut player_load: EventReader<PlayerLoaded>,
+    mut server: ResMut<RenetServer>,
+    ball_query: Query<(&NetworkObject, &Transform), With<Ball>>,
+    tick: Res<Tick>,
+) {
+    for load in player_load.read() {
+        for (net_obj, transform) in ball_query.iter() {
+            let net_spawn = NetworkSpawn::Ball(transform.clone());
+            let message = ReliableMessageFromServer::Spawn(Spawn {
+                net_obj: net_obj.clone(),
+                tick: tick.clone(),
+                net_spawn,
+            });
+            let bytes = bincode::serialize(&message).unwrap();
+            server.send_message(load.client_id, DefaultChannel::ReliableUnordered, bytes);
+        }
+    }
+}
