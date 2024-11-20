@@ -69,7 +69,7 @@ impl Plugin for Client {
 }
 
 #[derive(Debug, Component)]
-struct WorldModelCamera;
+pub struct PlayerCamera;
 
 fn spawn_view_model(
     mut commands: Commands,
@@ -97,7 +97,7 @@ fn spawn_view_model(
     println!("spawning player camera");
     commands.entity(entity).with_children(|parent| {
         parent.spawn((
-            WorldModelCamera,
+            PlayerCamera,
             Camera3dBundle {
                 projection: PerspectiveProjection {
                     fov: 90.0_f32.to_radians(),

@@ -17,10 +17,7 @@ use crate::{
         server::{MessageReaderOnServer, ReliableMessageFromServer, TickSync},
     },
     shared::{
-        self, despawn_recursive_and_broadcast,
-        objects::{player::Player, NetworkObject},
-        tick::{get_unix_millis, Tick},
-        GameLogic,
+        self, despawn_recursive_and_broadcast, objects::{player::Player, NetworkObject}, scenes::setup_scene_1, tick::{get_unix_millis, Tick}, GameLogic
     },
 };
 
@@ -28,7 +25,7 @@ pub fn run() {
     let is_server = true;
     App::new()
         .add_plugins((DefaultPlugins, Server))
-        .add_systems(Startup, setup)
+        .add_systems(Startup, (setup, setup_scene_1))
         .add_systems(
             FixedUpdate,
             (handle_server_events, handle_ready_game).in_set(GameLogic::Sync),

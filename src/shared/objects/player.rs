@@ -1,19 +1,18 @@
 use std::collections::VecDeque;
 
 use bevy::{input::mouse::MouseMotion, prelude::*, utils::HashMap};
+use bevy_rapier3d::prelude::*;
 use bevy_renet::renet::{DefaultChannel, RenetClient, RenetServer};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    message::{
+    client::PlayerCamera, message::{
         client::{MessageReaderOnClient, OrderedInput, UnreliableMessageFromClient},
         server::{
             self, PlayerPositionSync, ReliableMessageFromServer, Spawn, UnreliableMessageFromServer,
         },
         spawn::NetworkSpawn,
-    },
-    server::{ClientNetworkObjectMap, PlayerLoaded},
-    shared::{tick::Tick, GameLogic},
+    }, server::{ClientNetworkObjectMap, PlayerLoaded}, shared::{tick::Tick, GameLogic}
 };
 
 use super::{LastSyncTracker, NetworkObject};
@@ -24,9 +23,8 @@ pub struct PlayerPlugin {
 
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(ClientInputs::default());
-        app.insert_resource(InputBuffer::default());
         if self.is_server {
+            app.insert_resource(ClientInputs::default());
             app.add_systems(
                 FixedUpdate,
                 (
@@ -38,6 +36,7 @@ impl Plugin for PlayerPlugin {
                 ),
             );
         } else {
+            app.insert_resource(InputBuffer::default());
             app.add_systems(
                 FixedUpdate,
                 (
@@ -108,7 +107,6 @@ impl ClientInputs {
                 .enumerate()
                 .min_by_key(|(_, input)| input.order)
             {
-                // Remove and store the lowest-order input
                 let input = ord_inputs.remove(min_index);
                 inputs.insert(obj.clone(), input);
             }
@@ -166,8 +164,6 @@ fn broadcast_player_spawns(
 
 fn spawn_players(
     mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
     reader: Res<MessageReaderOnClient>,
     local_player: Res<LocalPlayer>,
 ) {
@@ -178,14 +174,14 @@ fn spawn_players(
         if let NetworkSpawn::Player(transform) = spawn.net_spawn {
             println!("spawning player");
             let mut e = commands.spawn(Player);
-            e.insert(PbrBundle {
-                mesh: meshes.add(Sphere::default().mesh().ico(5).unwrap()),
-                material: materials.add(Color::srgb(0.0, 1.0, 0.0)),
-                transform,
-                ..Default::default()
-            })
-            .insert(LastSyncTracker::<Transform>::new(spawn.tick.clone()))
-            .insert(spawn.net_obj.clone());
+            e.insert(LastSyncTracker::<Transform>::new(spawn.tick.clone()))
+                .insert((
+                    KinematicCharacterController::default(),
+                    RigidBody::KinematicPositionBased,
+                    Collider::capsule_y(0.5, 0.25),
+                    TransformBundle::from_transform(transform),
+                ))
+                .insert(spawn.net_obj.clone());
             if spawn.net_obj == local_player.0 {
                 e.insert(LocalPlayerTag);
             }
@@ -214,21 +210,25 @@ fn recv_player_data(
     reader: Res<MessageReaderOnClient>,
     mut query: Query<
         (
+            Entity,
             &mut Transform,
             &NetworkObject,
             &mut LastSyncTracker<Transform>,
+            &Collider,
+            &KinematicCharacterController,
         ),
         With<Player>,
     >,
     local_player: Res<LocalPlayer>,
     ibuf: Res<InputBuffer>,
     time: Res<Time>,
+    mut context: ResMut<RapierContext>
 ) {
     for msg in reader.unreliable_messages() {
         let UnreliableMessageFromServer::PlayerPositionSync(pos_sync) = msg else {
             continue;
         };
-        for (mut transform, obj, mut last_sync_tracker) in query.iter_mut() {
+        for (entity, mut transform, obj, mut last_sync_tracker, shape, controller) in query.iter_mut() {
             if obj.id == pos_sync.net_obj.id && last_sync_tracker.last_tick < pos_sync.tick {
                 last_sync_tracker.last_tick = pos_sync.tick.clone();
                 transform.translation = pos_sync.translation;
@@ -236,9 +236,18 @@ fn recv_player_data(
                 if pos_sync.net_obj.id == local_player.0.id {
                     let inputs = ibuf.inputs_after_order(pos_sync.last_input_order);
                     for input in inputs {
-                        apply_input(&input.input, &mut transform, &time);
+                        apply_input(
+                            &mut context,
+                            &input.input,
+                            &mut transform,
+                            shape,
+                            controller,
+                            &time,
+                            entity,
+                        );
                     }
                 }
+
             }
         }
     }
@@ -253,31 +262,25 @@ fn read_input(
     if let Ok(player_transform) = query.get_single() {
         let mut local_direction = Vec3::ZERO;
 
-        // Map WASD input to local directions
         if keyboard_input.pressed(KeyCode::KeyW) {
-            local_direction -= Vec3::Z; // Forward
+            local_direction -= Vec3::Z; 
         }
         if keyboard_input.pressed(KeyCode::KeyS) {
-            local_direction += Vec3::Z; // Backward
+            local_direction += Vec3::Z; 
         }
         if keyboard_input.pressed(KeyCode::KeyA) {
-            local_direction -= Vec3::X; // Left
+            local_direction -= Vec3::X; 
         }
         if keyboard_input.pressed(KeyCode::KeyD) {
-            local_direction += Vec3::X; // Right
+            local_direction += Vec3::X; 
         }
 
         if local_direction.length_squared() > 0.0 {
             local_direction = local_direction.normalize();
         }
 
-        // Convert local direction to world space using the player's transform
         let world_direction = player_transform.rotation * local_direction;
-
-        // Project the direction onto the XZ plane to prevent upward movement
         let world_direction_xz = Vec3::new(world_direction.x, 0.0, world_direction.z);
-
-        // Normalize the XZ direction
         let final_direction = if world_direction_xz.length_squared() > 0.0 {
             world_direction_xz.normalize()
         } else {
@@ -304,9 +307,7 @@ fn read_inputs(
 ) {
     for (client_id, msg) in reader.unreliable_messages() {
         if let UnreliableMessageFromClient::Input(ordered_input) = msg {
-            // Map the client ID to the player's NetworkObject
             if let Some(net_obj) = client_netmap.0.get(client_id) {
-                // Insert the input into the HashMap for the specific tick
                 inputs.push_input(net_obj.clone(), ordered_input.clone());
             } else {
                 warn!("Unknown client_id: {}", client_id);
@@ -318,28 +319,80 @@ fn read_inputs(
 }
 
 fn apply_inputs(
-    mut query: Query<(&mut Transform, &NetworkObject, &mut LastInputTracker), With<Player>>,
+    mut query: Query<
+        (
+            Entity,
+            &mut Transform,
+            &NetworkObject,
+            &mut LastInputTracker,
+            &KinematicCharacterController,
+            &Collider,
+        ),
+        With<Player>,
+    >,
     time: Res<Time>,
     mut inputs: ResMut<ClientInputs>,
+    mut context: ResMut<RapierContext>,
 ) {
     let net_obj_inputs = inputs.pop_inputs();
-    for (mut transform, net_obj, mut last_input_tracker) in query.iter_mut() {
+    for (entity, mut transform, net_obj, mut last_input_tracker, controller, shape) in query.iter_mut() {
         if let Some(input) = net_obj_inputs.get(net_obj) {
-            apply_input(&input.input, &mut transform, &time);
+            apply_input(
+                &mut context,
+                &input.input,
+                &mut transform,
+                shape,
+                controller,
+                &time,
+                entity,
+            );
             last_input_tracker.order = input.order;
         }
     }
 }
 
-fn apply_input(input: &Input, transform: &mut Transform, time: &Time) {
-    transform.translation += input.direction * 5.0 * time.delta_seconds();
+fn apply_input(
+    context: &mut RapierContext,
+    input: &Input,
+    transform: &mut Transform,
+    shape: &Collider,
+    char_controller: &KinematicCharacterController,
+    time: &Time,
+    curr_player: Entity,
+) {
+    let movement = input.direction * 5.0 * time.delta_seconds();
+    let out = context.move_shape(
+        movement,
+        shape,
+        transform.translation,
+        transform.rotation,
+        0f32,
+        &MoveShapeOptions {
+            up: char_controller.up,
+            offset: char_controller.offset,
+            slide: char_controller.slide,
+            autostep: char_controller.autostep,
+            max_slope_climb_angle: char_controller.max_slope_climb_angle,
+            min_slope_slide_angle: char_controller.min_slope_slide_angle,
+            apply_impulse_to_dynamic_bodies: char_controller.apply_impulse_to_dynamic_bodies,
+            snap_to_ground: char_controller.snap_to_ground,
+            normal_nudge_factor: char_controller.normal_nudge_factor,
+        },
+        QueryFilter::default().exclude_collider(curr_player),
+        |_| {},
+    );
+    transform.translation += out.effective_translation;
 }
 
 fn rotate_player(
     mut mouse_motion: EventReader<MouseMotion>,
-    mut player: Query<&mut Transform, With<LocalPlayerTag>>,
+    mut player: Query<&mut Transform, (With<LocalPlayerTag>, Without<PlayerCamera>)>,
+    mut camera: Query<&mut Transform, (With<PlayerCamera>, Without<LocalPlayerTag>)>,
 ) {
     let Ok(mut transform) = player.get_single_mut() else {
+        return;
+    };
+    let Ok(mut camera) = camera.get_single_mut() else {
         return;
     };
     for motion in mouse_motion.read() {
@@ -347,7 +400,7 @@ fn rotate_player(
         let pitch = -motion.delta.y * 0.002;
         // Order of rotations is important, see <https://gamedev.stackexchange.com/a/136175/103059>
         transform.rotate_y(yaw);
-        transform.rotate_local_x(pitch);
+        camera.rotate_local_x(pitch);
     }
 }
 
@@ -361,9 +414,12 @@ fn load_player(
     for load in player_load.read() {
         commands.spawn((
             Player,
-            Transform::from_xyz(0.0, 1.0, 0.0),
             load.net_obj.clone(),
             LastInputTracker::default(),
+            KinematicCharacterController::default(),
+            RigidBody::KinematicPositionBased,
+            Collider::capsule_y(0.5, 0.25),
+            TransformBundle::from_transform(Transform::from_xyz(0.0, 1.0, 0.0)),
         ));
 
         for (net_obj, transform) in player_query.iter() {
@@ -378,3 +434,4 @@ fn load_player(
         }
     }
 }
+

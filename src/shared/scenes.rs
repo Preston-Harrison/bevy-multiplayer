@@ -1,6 +1,7 @@
 use bevy::{
     color::palettes::tailwind, ecs::system::RunSystemOnce, prelude::*, render::view::RenderLayers,
 };
+use bevy_rapier3d::prelude::*;
 
 use super::render::{DEFAULT_RENDER_LAYER, VIEW_MODEL_RENDER_LAYER};
 
@@ -32,7 +33,10 @@ fn spawn_world_model(
         material: material.clone(),
         transform: Transform::from_xyz(0.0, 0.25, -3.0),
         ..default()
-    });
+    }).insert((
+        RigidBody::Fixed,
+        Collider::cuboid(1.0, 0.25, 0.5),
+    ));
 
     commands.spawn(MaterialMeshBundle {
         mesh: cube,
