@@ -1,18 +1,12 @@
 use std::marker::PhantomData;
-
-use crate::message::{
-    client::MessageReaderOnClient,
-    server::{ReliableMessageFromServer, Spawn, UnreliableMessageFromServer},
-    spawn::NetworkSpawn,
-};
 use bevy::prelude::*;
-use bevy_renet::renet::{DefaultChannel, RenetServer};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 
-use super::{tick::Tick, GameLogic};
+use super::tick::Tick;
 
 pub mod player;
+pub mod ball;
 
 #[derive(Serialize, Deserialize, Component, Clone, Debug, Hash, PartialEq, Eq)]
 pub struct NetworkObject {
@@ -42,112 +36,3 @@ impl NetworkObject {
     }
 }
 
-#[derive(Component)]
-pub struct Ball;
-
-pub struct BallPlugin {
-    pub is_server: bool,
-}
-
-impl Plugin for BallPlugin {
-    fn build(&self, app: &mut App) {
-        if self.is_server {
-            app.add_systems(FixedUpdate, (broadcast_ball_spawns, broadcast_ball_data));
-        } else {
-            app.add_systems(
-                FixedUpdate,
-                (
-                    spawn_balls.in_set(GameLogic::Spawn),
-                    recv_ball_data.in_set(GameLogic::Sync),
-                ),
-            );
-        }
-    }
-}
-
-fn broadcast_ball_spawns(
-    query: Query<(&NetworkObject, &Transform), Added<Ball>>,
-    mut server: ResMut<RenetServer>,
-    tick: Res<Tick>,
-) {
-    for (network_obj, transform) in query.iter() {
-        let network_spawn = NetworkSpawn::Ball(transform.clone());
-        let spawn = Spawn {
-            net_obj: network_obj.clone(),
-            net_spawn: network_spawn,
-            tick: tick.clone(),
-        };
-        let message = ReliableMessageFromServer::Spawn(spawn);
-        let bytes = bincode::serialize(&message).unwrap();
-        server.broadcast_message(DefaultChannel::ReliableUnordered, bytes);
-    }
-}
-
-fn spawn_balls(
-    mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    reader: Res<MessageReaderOnClient>,
-) {
-    for msg in reader.reliable_messages() {
-        let ReliableMessageFromServer::Spawn(spawn) = msg else {
-            continue;
-        };
-        if let NetworkSpawn::Ball(transform) = spawn.net_spawn {
-            commands
-                .spawn(Ball)
-                .insert(PbrBundle {
-                    mesh: meshes.add(Sphere::default().mesh().ico(5).unwrap()),
-                    material: materials.add(Color::srgb(0.0, 0.0, 1.0)),
-                    transform,
-                    ..Default::default()
-                })
-                .insert(LastSyncTracker::<Transform>::new(spawn.tick.clone()))
-                .insert(spawn.net_obj.clone());
-        }
-    }
-}
-
-fn broadcast_ball_data(
-    query: Query<(&NetworkObject, &Transform), With<Ball>>,
-    mut server: ResMut<RenetServer>,
-    tick: Res<Tick>,
-) {
-    for (obj, transform) in query.iter() {
-        let message = UnreliableMessageFromServer::TransformSync(
-            obj.clone(),
-            transform.clone(),
-            tick.clone(),
-        );
-        let bytes = bincode::serialize(&message).unwrap();
-        server.broadcast_message(DefaultChannel::Unreliable, bytes);
-    }
-}
-
-fn recv_ball_data(
-    reader: Res<MessageReaderOnClient>,
-    mut query: Query<
-        (
-            &mut Transform,
-            &NetworkObject,
-            &mut LastSyncTracker<Transform>,
-        ),
-        With<Ball>,
-    >,
-) {
-    for msg in reader.unreliable_messages() {
-        let UnreliableMessageFromServer::TransformSync(net_obj, net_transform, sync_tick) = msg
-        else {
-            continue;
-        };
-        for (mut transform, obj, mut tracker) in query.iter_mut() {
-            if obj.id == net_obj.id {
-                if tracker.last_tick < *sync_tick {
-                    *transform = *net_transform;
-                    tracker.last_tick = sync_tick.clone();
-                }
-                break;
-            }
-        }
-    }
-}

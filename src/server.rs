@@ -21,7 +21,7 @@ use crate::{
         self, despawn_recursive_and_broadcast,
         objects::{
             player::{LastInputTracker, Player},
-            Ball, NetworkObject,
+            ball::Ball, NetworkObject,
         },
         tick::{get_unix_millis, Tick},
         GameLogic,

@@ -1,12 +1,9 @@
-use std::time::Duration;
-
 use bevy::prelude::*;
 use bevy_renet::renet::{DefaultChannel, RenetServer};
-use rand::Rng;
 
 use crate::message::{client::MessageReaderOnClient, server::ReliableMessageFromServer};
 
-use self::objects::{player::PlayerPlugin, Ball, BallPlugin, NetworkObject};
+use self::objects::{ball::BallPlugin, player::PlayerPlugin, NetworkObject};
 
 pub mod objects;
 pub mod render;
@@ -28,8 +25,9 @@ pub enum GameLogic {
     /// Server will send tick adjustments here, client will read tick adjustments
     /// here.
     TickAdjust,
-    /// Spawn and despawn.
+    /// Server spawns and despawns here, client receives spawns here.
     Spawn,
+    /// Server sends data here, client receives data here.
     Sync,
     Game,
     End,
@@ -67,14 +65,7 @@ impl Plugin for Game {
                 is_server: self.is_server,
             },
         ));
-        app.insert_resource(RandomBallTimer(Timer::new(
-            Duration::from_secs(10),
-            TimerMode::Repeating,
-        )));
-
-        if self.is_server {
-            app.add_systems(FixedUpdate, spawn_random_balls.in_set(GameLogic::Game));
-        } else {
+        if !self.is_server {
             app.add_systems(FixedUpdate, despawn.in_set(GameLogic::Spawn));
         }
         app.configure_sets(
@@ -91,54 +82,6 @@ impl Plugin for Game {
                 .chain()
                 .run_if(in_state(AppState::InGame)),),
         );
-    }
-}
-
-#[derive(Resource)]
-struct RandomBallTimer(Timer);
-
-#[derive(Component)]
-struct MoveUp;
-
-fn spawn_random_balls(
-    mut balls: Query<(Entity, &NetworkObject, &mut Transform, Option<&MoveUp>), With<Ball>>,
-    mut commands: Commands,
-    time: Res<Time>,
-    mut timer: ResMut<RandomBallTimer>,
-    mut server: ResMut<RenetServer>,
-) {
-    if timer.0.tick(time.delta()).finished() {
-        let mut despawns = 0;
-        for (entity, obj, _, _) in balls.iter() {
-            despawns += 1;
-            despawn_recursive_and_broadcast(&mut server, &mut commands, entity, obj.clone());
-        }
-        println!("spawning random balls, despawning {despawns}");
-        random_balls(commands);
-    } else {
-        for (_, _, mut transform, move_up) in balls.iter_mut() {
-            if move_up.is_some() {
-                transform.translation.z += 10.0 * time.delta_seconds();
-            } else {
-                transform.translation.z -= 10.0 * time.delta_seconds();
-            }
-        }
-    }
-}
-
-fn random_balls(mut commands: Commands) {
-    let mut rng = rand::thread_rng();
-
-    for _ in 0..20 {
-        let x = rng.gen_range(-30..30) as f32;
-        let y = rng.gen_range(-30..30) as f32;
-        let z = rng.gen_range(-30..30) as f32;
-        let mut e = commands.spawn(Ball);
-        e.insert(Transform::from_xyz(x, y, z));
-        e.insert(NetworkObject::rand());
-        if rng.gen_range(0..=1) == 1 {
-            e.insert(MoveUp);
-        }
     }
 }
 
