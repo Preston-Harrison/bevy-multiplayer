@@ -17,7 +17,11 @@ use crate::{
         server::{MessageReaderOnServer, ReliableMessageFromServer, TickSync},
     },
     shared::{
-        self, despawn_recursive_and_broadcast, objects::{player::Player, NetworkObject}, scenes::setup_scene_1, tick::{get_unix_millis, Tick}, GameLogic
+        self, despawn_recursive_and_broadcast,
+        objects::{player::Player, NetworkObject},
+        scenes::setup_scene_1,
+        tick::{get_unix_millis, Tick},
+        GameLogic,
     },
 };
 

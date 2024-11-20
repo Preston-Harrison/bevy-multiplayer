@@ -28,15 +28,14 @@ fn spawn_world_model(
         ..default()
     });
 
-    commands.spawn(MaterialMeshBundle {
-        mesh: cube.clone(),
-        material: material.clone(),
-        transform: Transform::from_xyz(0.0, 0.25, -3.0),
-        ..default()
-    }).insert((
-        RigidBody::Fixed,
-        Collider::cuboid(1.0, 0.25, 0.5),
-    ));
+    commands
+        .spawn(MaterialMeshBundle {
+            mesh: cube.clone(),
+            material: material.clone(),
+            transform: Transform::from_xyz(0.0, 0.25, -3.0),
+            ..default()
+        })
+        .insert((RigidBody::Fixed, Collider::cuboid(1.0, 0.5, 0.5)));
 
     commands.spawn(MaterialMeshBundle {
         mesh: cube,

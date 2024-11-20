@@ -6,13 +6,16 @@ use bevy_renet::renet::{DefaultChannel, RenetClient, RenetServer};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    client::PlayerCamera, message::{
+    client::{PlayerCamera, PlayerCameraTarget},
+    message::{
         client::{MessageReaderOnClient, OrderedInput, UnreliableMessageFromClient},
         server::{
             self, PlayerPositionSync, ReliableMessageFromServer, Spawn, UnreliableMessageFromServer,
         },
         spawn::NetworkSpawn,
-    }, server::{ClientNetworkObjectMap, PlayerLoaded}, shared::{tick::Tick, GameLogic}
+    },
+    server::{ClientNetworkObjectMap, PlayerLoaded},
+    shared::{tick::Tick, GameLogic},
 };
 
 use super::{LastSyncTracker, NetworkObject};
@@ -45,7 +48,13 @@ impl Plugin for PlayerPlugin {
                     read_input.in_set(GameLogic::Start),
                 ),
             );
-            app.add_systems(Update, rotate_player);
+            app.add_systems(
+                Update,
+                (
+                    rotate_player,
+                    rubber_band_player_camera.after(rotate_player),
+                ),
+            );
         }
     }
 }
@@ -222,13 +231,15 @@ fn recv_player_data(
     local_player: Res<LocalPlayer>,
     ibuf: Res<InputBuffer>,
     time: Res<Time>,
-    mut context: ResMut<RapierContext>
+    mut context: ResMut<RapierContext>,
 ) {
     for msg in reader.unreliable_messages() {
         let UnreliableMessageFromServer::PlayerPositionSync(pos_sync) = msg else {
             continue;
         };
-        for (entity, mut transform, obj, mut last_sync_tracker, shape, controller) in query.iter_mut() {
+        for (entity, mut transform, obj, mut last_sync_tracker, shape, controller) in
+            query.iter_mut()
+        {
             if obj.id == pos_sync.net_obj.id && last_sync_tracker.last_tick < pos_sync.tick {
                 last_sync_tracker.last_tick = pos_sync.tick.clone();
                 transform.translation = pos_sync.translation;
@@ -247,7 +258,6 @@ fn recv_player_data(
                         );
                     }
                 }
-
             }
         }
     }
@@ -263,16 +273,16 @@ fn read_input(
         let mut local_direction = Vec3::ZERO;
 
         if keyboard_input.pressed(KeyCode::KeyW) {
-            local_direction -= Vec3::Z; 
+            local_direction -= Vec3::Z;
         }
         if keyboard_input.pressed(KeyCode::KeyS) {
-            local_direction += Vec3::Z; 
+            local_direction += Vec3::Z;
         }
         if keyboard_input.pressed(KeyCode::KeyA) {
-            local_direction -= Vec3::X; 
+            local_direction -= Vec3::X;
         }
         if keyboard_input.pressed(KeyCode::KeyD) {
-            local_direction += Vec3::X; 
+            local_direction += Vec3::X;
         }
 
         if local_direction.length_squared() > 0.0 {
@@ -335,7 +345,9 @@ fn apply_inputs(
     mut context: ResMut<RapierContext>,
 ) {
     let net_obj_inputs = inputs.pop_inputs();
-    for (entity, mut transform, net_obj, mut last_input_tracker, controller, shape) in query.iter_mut() {
+    for (entity, mut transform, net_obj, mut last_input_tracker, controller, shape) in
+        query.iter_mut()
+    {
         if let Some(input) = net_obj_inputs.get(net_obj) {
             apply_input(
                 &mut context,
@@ -386,8 +398,8 @@ fn apply_input(
 
 fn rotate_player(
     mut mouse_motion: EventReader<MouseMotion>,
-    mut player: Query<&mut Transform, (With<LocalPlayerTag>, Without<PlayerCamera>)>,
-    mut camera: Query<&mut Transform, (With<PlayerCamera>, Without<LocalPlayerTag>)>,
+    mut player: Query<&mut Transform, (With<LocalPlayerTag>, Without<PlayerCameraTarget>)>,
+    mut camera: Query<&mut Transform, (With<PlayerCameraTarget>, Without<LocalPlayerTag>)>,
 ) {
     let Ok(mut transform) = player.get_single_mut() else {
         return;
@@ -401,6 +413,28 @@ fn rotate_player(
         // Order of rotations is important, see <https://gamedev.stackexchange.com/a/136175/103059>
         transform.rotate_y(yaw);
         camera.rotate_local_x(pitch);
+    }
+}
+
+fn rubber_band_player_camera(
+    target: Query<&GlobalTransform, (With<PlayerCameraTarget>, Without<PlayerCamera>)>,
+    mut camera: Query<&mut Transform, (With<PlayerCamera>, Without<PlayerCameraTarget>)>,
+) {
+    let Ok(target) = target.get_single() else {
+        error!("rubber_band_player_camera: target not found");
+        return;
+    };
+    let Ok(mut camera) = camera.get_single_mut() else {
+        error!("rubber_band_player_camera: camera not found");
+        return;
+    };
+
+    let target = target.compute_transform();
+    camera.rotation = target.rotation;
+    if camera.translation.distance_squared(target.translation) < (0.1 * 0.1) {
+        camera.translation = target.translation;
+    } else {
+        camera.translation = camera.translation.lerp(target.translation, 0.3);
     }
 }
 
@@ -434,4 +468,3 @@ fn load_player(
         }
     }
 }
-

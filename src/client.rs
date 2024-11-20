@@ -34,7 +34,7 @@ pub fn run() {
         .add_systems(Startup, spawn_connect_button)
         .add_systems(
             FixedUpdate,
-            spawn_view_model.run_if(in_state(LoadState::WaitingForPlayerSpawn)),
+            spawn_player_camera.run_if(in_state(LoadState::WaitingForPlayerSpawn)),
         )
         .add_systems(OnEnter(LoadState::Connecting), load_local)
         .add_systems(
@@ -69,9 +69,12 @@ impl Plugin for Client {
 }
 
 #[derive(Debug, Component)]
+pub struct PlayerCameraTarget;
+
+#[derive(Debug, Component)]
 pub struct PlayerCamera;
 
-fn spawn_view_model(
+fn spawn_player_camera(
     mut commands: Commands,
     players: Query<(Entity, &NetworkObject), Added<Player>>,
     cameras: Query<Entity, With<UICamera>>,
@@ -97,17 +100,21 @@ fn spawn_view_model(
     println!("spawning player camera");
     commands.entity(entity).with_children(|parent| {
         parent.spawn((
-            PlayerCamera,
-            Camera3dBundle {
-                projection: PerspectiveProjection {
-                    fov: 90.0_f32.to_radians(),
-                    ..default()
-                }
-                .into(),
-                ..default()
-            },
+            PlayerCameraTarget,
+            TransformBundle::from_transform(Transform::from_xyz(0.0, 0.5, 0.0)),
         ));
     });
+    commands.spawn((
+        PlayerCamera,
+        Camera3dBundle {
+            projection: PerspectiveProjection {
+                fov: 60.0_f32.to_radians(),
+                ..default()
+            }
+            .into(),
+            ..default()
+        },
+    ));
 }
 
 #[derive(Component)]
