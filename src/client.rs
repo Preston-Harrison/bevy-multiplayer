@@ -12,9 +12,10 @@ use std::time::SystemTime;
 use crate::message::client::{MessageReaderOnClient, ReliableMessageFromClient};
 use crate::message::server::ReliableMessageFromServer;
 use crate::message::MessagesAvailable;
+use crate::shared::objects::grounded::Grounded;
 use crate::shared::objects::player::{LocalPlayer, LocalPlayerTag, Player};
 use crate::shared::objects::LastSyncTracker;
-use crate::shared::physics::Velocity;
+use crate::shared::physics::Kinematics;
 use crate::shared::tick::get_client_tick;
 use crate::shared::AppState;
 use crate::{message, shared};
@@ -210,7 +211,7 @@ fn set_local_player(
                 commands.insert_resource(LocalPlayer(player_info.net_obj.clone()));
                 commands
                     .spawn(Player)
-                    .insert(Velocity::new().with_gravity())
+                    .insert(Kinematics::new().with_gravity())
                     .insert(LastSyncTracker::<Transform>::new(player_info.tick.clone()))
                     .insert((
                         KinematicCharacterController::default(),
@@ -218,6 +219,7 @@ fn set_local_player(
                         Collider::capsule_y(0.5, 0.25),
                         TransformBundle::from_transform(player_info.transform),
                     ))
+                    .insert(Grounded::default())
                     .insert(player_info.net_obj.clone())
                     .insert(LocalPlayerTag);
             }

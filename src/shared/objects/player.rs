@@ -23,13 +23,17 @@ use crate::{
     server::{ClientNetworkObjectMap, PlayerNeedsInit, PlayerWantsUpdates},
     shared::{
         console::ConsoleMessage,
-        physics::{char_ctrl_to_move_opts, Velocity},
+        physics::{char_ctrl_to_move_opts, Kinematics},
         tick::Tick,
         GameLogic,
     },
 };
 
-use super::{gizmo::spawn_raycast_visual, LastSyncTracker, NetworkObject};
+use super::{
+    gizmo::spawn_raycast_visual,
+    grounded::{set_grounded, Grounded},
+    LastSyncTracker, NetworkObject,
+};
 
 pub struct PlayerPlugin {
     pub is_server: bool,
@@ -296,6 +300,7 @@ fn recv_position_sync(
             &mut LastSyncTracker<Transform>,
             &Collider,
             &KinematicCharacterController,
+            Option<&mut Grounded>,
         ),
         (With<Player>, With<LocalPlayerTag>),
     >,
@@ -317,7 +322,15 @@ fn recv_position_sync(
                 let Ok(record) = local_player.get_single_mut() else {
                     continue;
                 };
-                let (entity, mut transform, obj, mut last_sync_tracker, shape, controller) = record;
+                let (
+                    entity,
+                    mut transform,
+                    obj,
+                    mut last_sync_tracker,
+                    shape,
+                    controller,
+                    mut grounded,
+                ) = record;
                 if *obj == owned_sync.net_obj && last_sync_tracker.last_tick < owned_sync.tick {
                     last_sync_tracker.last_tick = owned_sync.tick.clone();
                     transform.translation = owned_sync.translation;
@@ -331,6 +344,7 @@ fn recv_position_sync(
                             controller,
                             &time,
                             entity,
+                            &mut grounded,
                         );
                     }
                 }
@@ -526,6 +540,7 @@ fn apply_inputs(
             &mut LastInputTracker,
             &KinematicCharacterController,
             &Collider,
+            Option<&mut Grounded>,
         ),
         With<Player>,
     >,
@@ -535,7 +550,7 @@ fn apply_inputs(
     mut server: ResMut<RenetServer>,
 ) {
     let net_obj_inputs = inputs.pop_inputs();
-    for (entity, mut transform, net_obj, mut last_input_tracker, controller, shape) in
+    for (entity, mut transform, net_obj, mut last_input_tracker, controller, shape, mut grounded) in
         query.iter_mut()
     {
         if let Some(input) = net_obj_inputs.get(net_obj) {
@@ -557,6 +572,7 @@ fn apply_inputs(
                 controller,
                 &time,
                 entity,
+                &mut grounded,
             );
             last_input_tracker.order = input.order;
         }
@@ -571,6 +587,7 @@ fn apply_input(
     char_controller: &KinematicCharacterController,
     time: &Time,
     curr_player: Entity,
+    grounded: &mut Option<Mut<Grounded>>,
 ) {
     let movement = input.direction * 5.0;
     let out = context.move_shape(
@@ -584,6 +601,7 @@ fn apply_input(
         |_| {},
     );
     transform.translation += out.effective_translation;
+    set_grounded(grounded, out.grounded);
 }
 
 fn rotate_player(
@@ -698,7 +716,8 @@ fn init_players(
             RigidBody::KinematicPositionBased,
             Collider::capsule_y(0.5, 0.25),
             TransformBundle::from_transform(transform),
-            Velocity::new().with_gravity(),
+            Kinematics::new().with_gravity(),
+            Grounded::default(),
         ));
 
         info!("sending player init");

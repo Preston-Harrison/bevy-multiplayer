@@ -36,6 +36,7 @@ pub enum GameLogic {
     /// Server sends data here, client receives data here.
     Sync,
     Game,
+    Kinematics,
     End,
 }
 
@@ -86,6 +87,7 @@ impl Plugin for Game {
                 GameLogic::Spawn,
                 GameLogic::Sync,
                 GameLogic::Game,
+                GameLogic::Kinematics,
                 GameLogic::End,
             )
                 .chain()

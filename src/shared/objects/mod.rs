@@ -7,6 +7,7 @@ use super::tick::Tick;
 
 pub mod ball;
 pub mod gizmo;
+pub mod grounded;
 pub mod player;
 
 #[derive(Serialize, Deserialize, Component, Clone, Debug, Hash, PartialEq, Eq)]

@@ -2,7 +2,11 @@ use bevy::{prelude::*, utils::HashMap};
 use bevy_rapier3d::prelude::*;
 
 use super::{
-    objects::{player::LocalPlayerTag, NetworkObject},
+    objects::{
+        grounded::{set_grounded, Grounded},
+        player::LocalPlayerTag,
+        NetworkObject,
+    },
     GameLogic,
 };
 
@@ -12,39 +16,69 @@ impl Plugin for PhysicsPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(RapierPhysicsPlugin::<NoUserData>::default())
             .add_plugins(RapierDebugRenderPlugin::default());
-        app.add_systems(FixedUpdate, apply_gravity.in_set(GameLogic::Game));
+        app.add_systems(
+            FixedUpdate,
+            (
+                apply_kinematics.in_set(GameLogic::Kinematics),
+                cancel_gravity_if_grounded
+                    .in_set(GameLogic::Kinematics)
+                    .before(apply_kinematics),
+            ),
+        );
     }
 }
 
 #[derive(Component)]
-pub struct Velocity {
-    map: HashMap<String, Vec3>,
+pub struct Kinematics {
+    velocity: HashMap<String, Vec3>,
+    acceleration: HashMap<String, Vec3>,
 }
 
-impl Velocity {
+impl Kinematics {
     pub fn new() -> Self {
         Self {
-            map: HashMap::new(),
+            velocity: HashMap::new(),
+            acceleration: HashMap::new(),
         }
     }
 
     pub fn with_gravity(mut self) -> Self {
-        self.set("gravity", Vec3::Y * GRAVITY);
+        self.set_acceleration(GRAVITY_KEY, Vec3::Y * GRAVITY);
         self
     }
 
-    pub fn set(&mut self, name: impl Into<String>, value: Vec3) {
-        self.map.insert(name.into(), value);
+    pub fn set_velocity(&mut self, name: impl Into<String>, value: Vec3) {
+        self.velocity.insert(name.into(), value);
     }
 
-    fn sum(&self) -> Vec3 {
-        self.map.values().sum()
+    pub fn set_acceleration(&mut self, name: impl Into<String>, value: Vec3) {
+        self.acceleration.insert(name.into(), value);
+    }
+
+    fn accelerate(&mut self, seconds: f32) {
+        for (k, v) in self.acceleration.iter() {
+            let velocity = self.velocity.entry(k.clone()).or_default();
+            *velocity += *v * seconds;
+        }
+    }
+
+    fn get_displacement(&self, seconds: f32) -> Vec3 {
+        self.velocity.values().sum::<Vec3>() * seconds
     }
 }
 
 const GRAVITY: f32 = -10.0;
+const GRAVITY_KEY: &str = "gravity";
 
-fn apply_gravity(
+fn cancel_gravity_if_grounded(mut kinematics: Query<(&mut Kinematics, &Grounded)>) {
+    for (mut kinematics, grounded) in kinematics.iter_mut() {
+        if grounded.is_grounded {
+            kinematics.set_velocity(GRAVITY_KEY, Vec3::ZERO);
+        }
+    }
+}
+
+fn apply_kinematics(
     mut context: ResMut<RapierContext>,
     player: Query<&NetworkObject, With<LocalPlayerTag>>,
     mut query: Query<(
@@ -53,16 +87,20 @@ fn apply_gravity(
         &KinematicCharacterController,
         &mut Transform,
         &Collider,
-        &Velocity,
+        &mut Kinematics,
+        Option<&mut Grounded>,
     )>,
     time: Res<Time>,
 ) {
     let local_player_tag = player.get_single().ok();
-    for (entity, net_obj, controller, mut transform, collider, velocity) in query.iter_mut() {
+    for (entity, net_obj, controller, mut transform, collider, mut velocity, mut grounded) in
+        query.iter_mut()
+    {
         if local_player_tag.is_some_and(|tag| tag != net_obj) {
             continue;
         }
-        let movement = velocity.sum() * time.delta_seconds();
+        velocity.accelerate(time.delta_seconds());
+        let movement = velocity.get_displacement(time.delta_seconds());
         let output = context.move_shape(
             movement,
             collider,
@@ -73,6 +111,7 @@ fn apply_gravity(
             QueryFilter::default().exclude_collider(entity),
             |_| {},
         );
+        set_grounded(&mut grounded, output.grounded);
         transform.translation += output.effective_translation;
     }
 }
