@@ -79,7 +79,10 @@ fn setup(mut commands: Commands) {
 }
 
 #[derive(Resource, Default)]
-pub struct ClientNetworkObjectMap(pub HashMap<ClientId, NetworkObject>);
+pub struct ClientNetworkObjectMap {
+    pub client_to_net_obj: HashMap<ClientId, NetworkObject>,
+    pub net_obj_to_client: HashMap<NetworkObject, ClientId>,
+}
 
 fn handle_server_events(
     mut server_events: EventReader<ServerEvent>,
@@ -95,7 +98,8 @@ fn handle_server_events(
             }
             ServerEvent::ClientDisconnected { client_id, reason } => {
                 println!("Client {} disconnected: {:?}", client_id, reason);
-                if let Some(net_obj) = client_map.0.remove(client_id) {
+                if let Some(net_obj) = client_map.client_to_net_obj.remove(client_id) {
+                    client_map.net_obj_to_client.remove(&net_obj);
                     for (entity, obj) in query.iter() {
                         if *obj == net_obj {
                             despawn_recursive_and_broadcast(
@@ -134,13 +138,14 @@ fn handle_ready_game(
 ) {
     for (client_id, msg) in reader.reliable_messages() {
         if *msg == ReliableMessageFromClient::Connected {
-            if client_map.0.contains_key(client_id) {
+            if client_map.client_to_net_obj.contains_key(client_id) {
                 println!("connected called twice");
                 continue;
             }
             println!("sending player network object");
             let net_obj = NetworkObject::new_rand();
-            client_map.0.insert(*client_id, net_obj.clone());
+            client_map.client_to_net_obj.insert(*client_id, net_obj.clone());
+            client_map.net_obj_to_client.insert(net_obj.clone(), *client_id);
             player_inits.send(PlayerNeedsInit {
                 client_id: *client_id,
                 net_obj,

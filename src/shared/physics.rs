@@ -1,4 +1,4 @@
-use bevy::prelude::*;
+use bevy::{prelude::*, utils::HashMap};
 use bevy_rapier3d::prelude::*;
 
 use super::{
@@ -16,10 +16,31 @@ impl Plugin for PhysicsPlugin {
     }
 }
 
-const GRAVITY: f32 = -10.0;
+#[derive(Component)]
+pub struct Velocity {
+    map: HashMap<String, Vec3>,
+}
 
-#[derive(Component, Default)]
-pub struct Gravity;
+impl Velocity {
+    pub fn new() -> Self {
+        Self { map: HashMap::new() }
+    }
+
+    pub fn with_gravity(mut self) -> Self {
+        self.set("gravity", Vec3::Y * GRAVITY);
+        self
+    }
+
+    pub fn set(&mut self, name: impl Into<String>, value: Vec3) {
+        self.map.insert(name.into(), value);
+    }
+
+    fn sum(&self) -> Vec3 {
+        self.map.values().sum()
+    }
+}
+
+const GRAVITY: f32 = -10.0;
 
 fn apply_gravity(
     mut context: ResMut<RapierContext>,
@@ -31,17 +52,17 @@ fn apply_gravity(
             &KinematicCharacterController,
             &mut Transform,
             &Collider,
+            &Velocity
         ),
-        With<Gravity>,
     >,
     time: Res<Time>,
 ) {
     let local_player_tag = player.get_single().ok();
-    for (entity, net_obj, controller, mut transform, collider) in query.iter_mut() {
+    for (entity, net_obj, controller, mut transform, collider, velocity) in query.iter_mut() {
         if local_player_tag.is_some_and(|tag| tag != net_obj) {
             continue;
         }
-        let movement = Vec3::Y * GRAVITY * time.delta_seconds();
+        let movement = velocity.sum() * time.delta_seconds();
         let output = context.move_shape(
             movement,
             collider,

@@ -47,6 +47,14 @@ pub struct PlayerPositionSync {
     pub net_obj: NetworkObject,
     pub translation: Vec3,
     pub tick: Tick,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct OwnedPlayerSync {
+    pub net_obj: NetworkObject,
+    pub translation: Vec3,
+    pub jump_velocity: Vec3,
+    pub tick: Tick,
     pub last_input_order: u64,
 }
 
@@ -54,7 +62,9 @@ pub struct PlayerPositionSync {
 pub enum UnreliableMessageFromServer {
     TransformSync(NetworkObject, Transform, Tick),
     PlayerPositionSync(PlayerPositionSync),
-    /// (Shooter, Shot)
+    /// Sent only to the owner of the player. Used for reconciliation.
+    OwnedPlayerSync(OwnedPlayerSync),
+    /// PlayerShot has structure of (Shooter, Shot)
     PlayerShot(NetworkObject, Shot),
 }
 

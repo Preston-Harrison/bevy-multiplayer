@@ -1,4 +1,3 @@
-use bevy::input::mouse::MouseButtonInput;
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, PrimaryWindow};
 use bevy_rapier3d::prelude::*;
@@ -15,7 +14,7 @@ use crate::message::server::ReliableMessageFromServer;
 use crate::message::MessagesAvailable;
 use crate::shared::objects::player::{LocalPlayer, LocalPlayerTag, Player};
 use crate::shared::objects::LastSyncTracker;
-use crate::shared::physics::Gravity;
+use crate::shared::physics::Velocity;
 use crate::shared::tick::get_client_tick;
 use crate::shared::AppState;
 use crate::{message, shared};
@@ -211,7 +210,7 @@ fn set_local_player(
                 commands.insert_resource(LocalPlayer(player_info.net_obj.clone()));
                 commands
                     .spawn(Player)
-                    .insert(Gravity::default())
+                    .insert(Velocity::new().with_gravity())
                     .insert(LastSyncTracker::<Transform>::new(player_info.tick.clone()))
                     .insert((
                         KinematicCharacterController::default(),

@@ -15,15 +15,14 @@ use crate::{
     message::{
         client::{MessageReaderOnClient, OrderedInput, UnreliableMessageFromClient},
         server::{
-            self, PlayerInit, PlayerPositionSync, ReliableMessageFromServer, Spawn,
-            UnreliableMessageFromServer,
+            self, OwnedPlayerSync, PlayerInit, PlayerPositionSync, ReliableMessageFromServer, Spawn, UnreliableMessageFromServer
         },
         spawn::NetworkSpawn,
     },
     server::{ClientNetworkObjectMap, PlayerNeedsInit, PlayerWantsUpdates},
     shared::{
         console::ConsoleMessage,
-        physics::{char_ctrl_to_move_opts, Gravity},
+        physics::{char_ctrl_to_move_opts, Velocity},
         tick::Tick,
         GameLogic,
     },
@@ -248,24 +247,47 @@ fn spawn_players(
 
 fn broadcast_player_data(
     query: Query<(&NetworkObject, &Transform, &LastInputTracker), With<Player>>,
+    client_netmap: Res<ClientNetworkObjectMap>,
     mut server: ResMut<RenetServer>,
     tick: Res<Tick>,
 ) {
-    for (obj, transform, last_input) in query.iter() {
+    for (obj, transform, input_tracker) in query.iter() {
+        let Some(client_id) = client_netmap.net_obj_to_client.get(obj) else {
+            warn!("no client id for player obj in broadcast_player_data");
+            continue;
+        };
+
         let message = UnreliableMessageFromServer::PlayerPositionSync(PlayerPositionSync {
             net_obj: obj.clone(),
             translation: transform.translation.clone(),
             tick: tick.clone(),
-            last_input_order: last_input.order,
         });
         let bytes = bincode::serialize(&message).unwrap();
-        server.broadcast_message(DefaultChannel::Unreliable, bytes);
+        server.broadcast_message_except(*client_id, DefaultChannel::Unreliable, bytes);
+
+        let message = UnreliableMessageFromServer::OwnedPlayerSync(OwnedPlayerSync {
+            net_obj: obj.clone(),
+            translation: transform.translation.clone(),
+            tick: tick.clone(),
+            jump_velocity: Vec3::ZERO, // TODO
+            last_input_order: input_tracker.order,
+        });
+        let bytes = bincode::serialize(&message).unwrap();
+        server.send_message(*client_id, DefaultChannel::Unreliable, bytes);
     }
 }
 
 fn recv_position_sync(
     reader: Res<MessageReaderOnClient>,
-    mut query: Query<
+    mut nonlocal_players: Query<
+        (
+            &mut Transform,
+            &NetworkObject,
+            &mut LastSyncTracker<Transform>,
+        ),
+        (With<Player>, Without<LocalPlayerTag>),
+    >,
+    mut local_player: Query<
         (
             Entity,
             &mut Transform,
@@ -274,26 +296,33 @@ fn recv_position_sync(
             &Collider,
             &KinematicCharacterController,
         ),
-        With<Player>,
+        (With<Player>, With<LocalPlayerTag>),
     >,
-    local_player: Res<LocalPlayer>,
     ibuf: Res<InputBuffer>,
     time: Res<Time>,
     mut context: ResMut<RapierContext>,
 ) {
     for msg in reader.unreliable_messages() {
-        let UnreliableMessageFromServer::PlayerPositionSync(pos_sync) = msg else {
-            continue;
-        };
-        for (entity, mut transform, obj, mut last_sync_tracker, shape, controller) in
-            query.iter_mut()
-        {
-            if *obj == pos_sync.net_obj && last_sync_tracker.last_tick < pos_sync.tick {
-                last_sync_tracker.last_tick = pos_sync.tick.clone();
-                transform.translation = pos_sync.translation;
-
-                if pos_sync.net_obj == local_player.0 {
-                    let inputs = ibuf.inputs_after_order(pos_sync.last_input_order);
+        match msg {
+            UnreliableMessageFromServer::PlayerPositionSync(pos_sync) => {
+                for (mut transform, obj, mut last_sync_tracker) in
+                    nonlocal_players.iter_mut()
+                {
+                    if *obj == pos_sync.net_obj && last_sync_tracker.last_tick < pos_sync.tick {
+                        last_sync_tracker.last_tick = pos_sync.tick.clone();
+                        transform.translation = pos_sync.translation;
+                    }
+                }
+            }
+            UnreliableMessageFromServer::OwnedPlayerSync(owned_sync) => {
+                let Ok(record) = local_player.get_single_mut() else {
+                    continue;
+                };
+                let (entity, mut transform, obj, mut last_sync_tracker, shape, controller) = record;
+                if *obj == owned_sync.net_obj && last_sync_tracker.last_tick < owned_sync.tick {
+                    last_sync_tracker.last_tick = owned_sync.tick.clone();
+                    transform.translation = owned_sync.translation;
+                    let inputs = ibuf.inputs_after_order(owned_sync.last_input_order);
                     for input in inputs {
                         apply_input(
                             &mut context,
@@ -307,6 +336,7 @@ fn recv_position_sync(
                     }
                 }
             }
+            _ => {}
         }
     }
 }
@@ -477,7 +507,7 @@ fn read_inputs(
 ) {
     for (client_id, msg) in reader.unreliable_messages() {
         if let UnreliableMessageFromClient::Input(ordered_input) = msg {
-            if let Some(net_obj) = client_netmap.0.get(client_id) {
+            if let Some(net_obj) = client_netmap.client_to_net_obj.get(client_id) {
                 inputs.push_input(net_obj.clone(), ordered_input.clone(), *client_id);
             } else {
                 warn!("Unknown client_id: {}", client_id);
@@ -543,9 +573,9 @@ fn apply_input(
     time: &Time,
     curr_player: Entity,
 ) {
-    let movement = input.direction * 5.0 * time.delta_seconds();
+    let movement = input.direction * 5.0;
     let out = context.move_shape(
-        movement,
+        movement * time.delta_seconds(),
         shape,
         transform.translation,
         transform.rotation,
@@ -669,7 +699,7 @@ fn init_players(
             RigidBody::KinematicPositionBased,
             Collider::capsule_y(0.5, 0.25),
             TransformBundle::from_transform(transform),
-            Gravity::default(),
+            Velocity::new().with_gravity(),
         ));
 
         info!("sending player init");
