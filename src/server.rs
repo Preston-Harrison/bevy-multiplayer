@@ -40,7 +40,8 @@ pub fn run() {
             message::server::ServerMessagePlugin,
         ))
         .insert_state(shared::AppState::InGame)
-        .add_event::<PlayerLoaded>()
+        .add_event::<PlayerWantsUpdates>()
+        .add_event::<PlayerNeedsInit>()
         .run();
 }
 
@@ -72,7 +73,9 @@ impl Plugin for Server {
 }
 
 fn setup(mut commands: Commands) {
-    commands.spawn(Camera3dBundle::default());
+    commands
+        .spawn(Camera3dBundle::default())
+        .insert(Transform::from_xyz(20.0, 20.0, 20.0).looking_at(Vec3::ZERO, Vec3::Y));
 }
 
 #[derive(Resource, Default)]
@@ -111,7 +114,12 @@ fn handle_server_events(
 }
 
 #[derive(Event)]
-pub struct PlayerLoaded {
+pub struct PlayerWantsUpdates {
+    pub client_id: ClientId,
+}
+
+#[derive(Event)]
+pub struct PlayerNeedsInit {
     pub client_id: ClientId,
     pub net_obj: NetworkObject,
 }
@@ -121,7 +129,8 @@ fn handle_ready_game(
     reader: Res<MessageReaderOnServer>,
     mut client_map: ResMut<ClientNetworkObjectMap>,
     tick: Res<Tick>,
-    mut player_loaded: EventWriter<PlayerLoaded>,
+    mut player_updates: EventWriter<PlayerWantsUpdates>,
+    mut player_inits: EventWriter<PlayerNeedsInit>,
 ) {
     for (client_id, msg) in reader.reliable_messages() {
         if *msg == ReliableMessageFromClient::Connected {
@@ -131,10 +140,11 @@ fn handle_ready_game(
             }
             println!("sending player network object");
             let net_obj = NetworkObject::rand();
-            let message = ReliableMessageFromServer::SetPlayerNetworkObject(net_obj.clone());
-            let bytes = bincode::serialize(&message).unwrap();
-            server.send_message(*client_id, DefaultChannel::ReliableUnordered, bytes);
             client_map.0.insert(*client_id, net_obj.clone());
+            player_inits.send(PlayerNeedsInit {
+                client_id: *client_id,
+                net_obj,
+            });
 
             let message = ReliableMessageFromServer::TickSync(TickSync {
                 tick: tick.get(),
@@ -144,13 +154,8 @@ fn handle_ready_game(
             server.send_message(*client_id, DefaultChannel::ReliableUnordered, bytes);
         }
         if *msg == ReliableMessageFromClient::ReadyForUpdates {
-            let Some(net_obj) = client_map.0.get(client_id) else {
-                println!("ready called twice");
-                continue;
-            };
-            player_loaded.send(PlayerLoaded {
+            player_updates.send(PlayerWantsUpdates {
                 client_id: *client_id,
-                net_obj: net_obj.clone(),
             });
         }
     }

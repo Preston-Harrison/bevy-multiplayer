@@ -6,7 +6,7 @@ use crate::{
         server::{ReliableMessageFromServer, Spawn, UnreliableMessageFromServer},
         spawn::NetworkSpawn,
     },
-    server::PlayerLoaded,
+    server::PlayerWantsUpdates,
     shared::{despawn_recursive_and_broadcast, tick::Tick, GameLogic},
 };
 use bevy::prelude::*;
@@ -183,7 +183,7 @@ fn random_balls(mut commands: Commands) {
 }
 
 fn load_balls(
-    mut player_load: EventReader<PlayerLoaded>,
+    mut player_load: EventReader<PlayerWantsUpdates>,
     mut server: ResMut<RenetServer>,
     ball_query: Query<(&NetworkObject, &Transform), With<Ball>>,
     tick: Res<Tick>,

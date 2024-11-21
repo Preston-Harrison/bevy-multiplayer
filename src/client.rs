@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bevy_rapier3d::prelude::*;
 use bevy_renet::renet::transport::{ClientAuthentication, NetcodeClientTransport};
 use bevy_renet::renet::{ConnectionConfig, DefaultChannel, RenetClient};
 use bevy_renet::transport::NetcodeClientPlugin;
@@ -10,8 +11,8 @@ use std::time::SystemTime;
 use crate::message::client::{MessageReaderOnClient, ReliableMessageFromClient};
 use crate::message::server::ReliableMessageFromServer;
 use crate::message::MessagesAvailable;
-use crate::shared::objects::player::{LocalPlayer, Player};
-use crate::shared::objects::NetworkObject;
+use crate::shared::objects::player::{LocalPlayer, LocalPlayerTag, Player};
+use crate::shared::objects::LastSyncTracker;
 use crate::shared::tick::get_client_tick;
 use crate::shared::AppState;
 use crate::{message, shared};
@@ -22,7 +23,6 @@ enum LoadState {
     Connecting,
     LocalLoaded,
     RemoteLoading,
-    WaitingForPlayerSpawn,
     Done,
 }
 
@@ -32,10 +32,6 @@ pub fn run() {
         .add_plugins((DefaultPlugins, Client))
         .insert_state(LoadState::Init)
         .add_systems(Startup, spawn_connect_button)
-        .add_systems(
-            FixedUpdate,
-            spawn_player_camera.run_if(in_state(LoadState::WaitingForPlayerSpawn)),
-        )
         .add_systems(OnEnter(LoadState::Connecting), load_local)
         .add_systems(
             FixedUpdate,
@@ -47,7 +43,6 @@ pub fn run() {
                 .in_set(MessagesAvailable),
         )
         .insert_state(shared::AppState::MainMenu)
-        .insert_resource(ServerInfoReceived::default())
         .add_plugins((
             shared::Game { is_server },
             shared::tick::TickPlugin { is_server },
@@ -66,55 +61,6 @@ impl Plugin for Client {
         app.add_plugins(RenetClientPlugin);
         app.add_plugins(NetcodeClientPlugin);
     }
-}
-
-#[derive(Debug, Component)]
-pub struct PlayerCameraTarget;
-
-#[derive(Debug, Component)]
-pub struct PlayerCamera;
-
-fn spawn_player_camera(
-    mut commands: Commands,
-    players: Query<(Entity, &NetworkObject), Added<Player>>,
-    cameras: Query<Entity, With<UICamera>>,
-    local_player: Res<LocalPlayer>,
-    mut load_state: ResMut<NextState<LoadState>>,
-) {
-    let mut entity = None;
-    for (e, net_obj) in players.iter() {
-        if *net_obj == local_player.0 {
-            entity = Some(e);
-        }
-    }
-
-    let Some(entity) = entity else {
-        return;
-    };
-    load_state.set(LoadState::Done);
-
-    for camera in cameras.iter() {
-        commands.entity(camera).despawn_recursive();
-    }
-
-    println!("spawning player camera");
-    commands.entity(entity).with_children(|parent| {
-        parent.spawn((
-            PlayerCameraTarget,
-            TransformBundle::from_transform(Transform::from_xyz(0.0, 0.5, 0.0)),
-        ));
-    });
-    commands.spawn((
-        PlayerCamera,
-        Camera3dBundle {
-            projection: PerspectiveProjection {
-                fov: 60.0_f32.to_radians(),
-                ..default()
-            }
-            .into(),
-            ..default()
-        },
-    ));
 }
 
 #[derive(Component)]
@@ -244,17 +190,29 @@ fn set_local_player(
     client: Option<ResMut<RenetClient>>,
     mut app_state: ResMut<NextState<AppState>>,
     mut load_state: ResMut<NextState<LoadState>>,
-    mut server_info: ResMut<ServerInfoReceived>,
+    mut server_info: Local<ServerInfoReceived>,
+    ui_camera: Query<Entity, With<UICamera>>,
 ) {
     let Some(mut client) = client else {
         return;
     };
     for msg in reader.reliable_messages() {
         match msg {
-            ReliableMessageFromServer::SetPlayerNetworkObject(net_obj) => {
+            ReliableMessageFromServer::InitPlayer(player_info) => {
                 println!("set local player");
                 server_info.set_player_obj = true;
-                commands.insert_resource(LocalPlayer(net_obj.clone()));
+                commands.insert_resource(LocalPlayer(player_info.net_obj.clone()));
+                commands
+                    .spawn(Player)
+                    .insert(LastSyncTracker::<Transform>::new(player_info.tick.clone()))
+                    .insert((
+                        KinematicCharacterController::default(),
+                        RigidBody::KinematicPositionBased,
+                        Collider::capsule_y(0.5, 0.25),
+                        TransformBundle::from_transform(player_info.transform),
+                    ))
+                    .insert(player_info.net_obj.clone())
+                    .insert(LocalPlayerTag);
             }
             ReliableMessageFromServer::TickSync(sync) => {
                 let tick = get_client_tick(sync.tick, sync.unix_millis);
@@ -271,6 +229,7 @@ fn set_local_player(
         let bytes = bincode::serialize(&message).unwrap();
         client.send_message(DefaultChannel::ReliableUnordered, bytes);
         app_state.set(AppState::InGame);
-        load_state.set(LoadState::WaitingForPlayerSpawn);
+        load_state.set(LoadState::Done);
+        commands.entity(ui_camera.single()).despawn_recursive();
     }
 }

@@ -6,15 +6,15 @@ use bevy_renet::renet::{DefaultChannel, RenetClient, RenetServer};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    client::{PlayerCamera, PlayerCameraTarget},
     message::{
         client::{MessageReaderOnClient, OrderedInput, UnreliableMessageFromClient},
         server::{
-            self, PlayerPositionSync, ReliableMessageFromServer, Spawn, UnreliableMessageFromServer,
+            self, PlayerInit, PlayerPositionSync, ReliableMessageFromServer, Spawn,
+            UnreliableMessageFromServer,
         },
         spawn::NetworkSpawn,
     },
-    server::{ClientNetworkObjectMap, PlayerLoaded},
+    server::{ClientNetworkObjectMap, PlayerNeedsInit, PlayerWantsUpdates},
     shared::{tick::Tick, GameLogic},
 };
 
@@ -36,6 +36,7 @@ impl Plugin for PlayerPlugin {
                     broadcast_player_data.in_set(GameLogic::Sync),
                     broadcast_player_spawns.in_set(GameLogic::Sync),
                     load_player.in_set(GameLogic::Sync),
+                    init_players.in_set(GameLogic::Spawn),
                 ),
             );
         } else {
@@ -43,6 +44,7 @@ impl Plugin for PlayerPlugin {
             app.add_systems(
                 FixedUpdate,
                 (
+                    spawn_player_camera,
                     spawn_players.in_set(GameLogic::Spawn),
                     recv_player_data.in_set(GameLogic::Sync),
                     read_input.in_set(GameLogic::Start),
@@ -180,10 +182,14 @@ fn spawn_players(
         let ReliableMessageFromServer::Spawn(spawn) = msg else {
             continue;
         };
+        if spawn.net_obj == local_player.0 {
+            continue;
+        };
         if let NetworkSpawn::Player(transform) = spawn.net_spawn {
             println!("spawning player");
-            let mut e = commands.spawn(Player);
-            e.insert(LastSyncTracker::<Transform>::new(spawn.tick.clone()))
+            commands
+                .spawn(Player)
+                .insert(LastSyncTracker::<Transform>::new(spawn.tick.clone()))
                 .insert((
                     KinematicCharacterController::default(),
                     RigidBody::KinematicPositionBased,
@@ -191,9 +197,6 @@ fn spawn_players(
                     TransformBundle::from_transform(transform),
                 ))
                 .insert(spawn.net_obj.clone());
-            if spawn.net_obj == local_player.0 {
-                e.insert(LocalPlayerTag);
-            }
         }
     }
 }
@@ -269,44 +272,46 @@ fn read_input(
     query: Query<&Transform, With<LocalPlayerTag>>,
     mut client: ResMut<RenetClient>,
 ) {
-    if let Ok(player_transform) = query.get_single() {
-        let mut local_direction = Vec3::ZERO;
+    let Ok(player_transform) = query.get_single() else {
+        error!("no player found when reading input");
+        return;
+    };
+    let mut local_direction = Vec3::ZERO;
 
-        if keyboard_input.pressed(KeyCode::KeyW) {
-            local_direction -= Vec3::Z;
-        }
-        if keyboard_input.pressed(KeyCode::KeyS) {
-            local_direction += Vec3::Z;
-        }
-        if keyboard_input.pressed(KeyCode::KeyA) {
-            local_direction -= Vec3::X;
-        }
-        if keyboard_input.pressed(KeyCode::KeyD) {
-            local_direction += Vec3::X;
-        }
+    if keyboard_input.pressed(KeyCode::KeyW) {
+        local_direction -= Vec3::Z;
+    }
+    if keyboard_input.pressed(KeyCode::KeyS) {
+        local_direction += Vec3::Z;
+    }
+    if keyboard_input.pressed(KeyCode::KeyA) {
+        local_direction -= Vec3::X;
+    }
+    if keyboard_input.pressed(KeyCode::KeyD) {
+        local_direction += Vec3::X;
+    }
 
-        if local_direction.length_squared() > 0.0 {
-            local_direction = local_direction.normalize();
-        }
+    if local_direction.length_squared() > 0.0 {
+        local_direction = local_direction.normalize();
+    }
 
-        let world_direction = player_transform.rotation * local_direction;
-        let world_direction_xz = Vec3::new(world_direction.x, 0.0, world_direction.z);
-        let final_direction = if world_direction_xz.length_squared() > 0.0 {
-            world_direction_xz.normalize()
-        } else {
-            Vec3::ZERO
+    let world_direction = player_transform.rotation * local_direction;
+    let world_direction_xz = Vec3::new(world_direction.x, 0.0, world_direction.z);
+    let final_direction = if world_direction_xz.length_squared() > 0.0 {
+        world_direction_xz.normalize()
+    } else {
+        Vec3::ZERO
+    };
+
+    if final_direction.length_squared() > 0.0 {
+        let input = Input {
+            direction: final_direction,
         };
-
-        if final_direction.length_squared() > 0.0 {
-            let input = Input {
-                direction: final_direction,
-            };
-            let order = ibuf.push_input(input.clone());
-            let message = UnreliableMessageFromClient::Input(OrderedInput { input, order });
-            let bytes = bincode::serialize(&message).unwrap();
-            client.send_message(DefaultChannel::Unreliable, bytes);
-            ibuf.prune(100);
-        }
+        let order = ibuf.push_input(input.clone());
+        let message = UnreliableMessageFromClient::Input(OrderedInput { input, order });
+        let bytes = bincode::serialize(&message).unwrap();
+        client.send_message(DefaultChannel::Unreliable, bytes);
+        ibuf.prune(100);
     }
 }
 
@@ -421,11 +426,9 @@ fn rubber_band_player_camera(
     mut camera: Query<&mut Transform, (With<PlayerCamera>, Without<PlayerCameraTarget>)>,
 ) {
     let Ok(target) = target.get_single() else {
-        error!("rubber_band_player_camera: target not found");
         return;
     };
     let Ok(mut camera) = camera.get_single_mut() else {
-        error!("rubber_band_player_camera: camera not found");
         return;
     };
 
@@ -439,23 +442,12 @@ fn rubber_band_player_camera(
 }
 
 fn load_player(
-    mut player_load: EventReader<PlayerLoaded>,
+    mut player_load: EventReader<PlayerWantsUpdates>,
     player_query: Query<(&NetworkObject, &Transform), With<Player>>,
     tick: Res<Tick>,
     mut server: ResMut<RenetServer>,
-    mut commands: Commands,
 ) {
     for load in player_load.read() {
-        commands.spawn((
-            Player,
-            load.net_obj.clone(),
-            LastInputTracker::default(),
-            KinematicCharacterController::default(),
-            RigidBody::KinematicPositionBased,
-            Collider::capsule_y(0.5, 0.25),
-            TransformBundle::from_transform(Transform::from_xyz(0.0, 1.0, 0.0)),
-        ));
-
         for (net_obj, transform) in player_query.iter() {
             let net_spawn = NetworkSpawn::Player(transform.clone());
             let message = ReliableMessageFromServer::Spawn(Spawn {
@@ -466,5 +458,65 @@ fn load_player(
             let bytes = bincode::serialize(&message).unwrap();
             server.send_message(load.client_id, DefaultChannel::ReliableUnordered, bytes);
         }
+    }
+}
+
+#[derive(Debug, Component)]
+pub struct PlayerCameraTarget;
+
+#[derive(Debug, Component)]
+pub struct PlayerCamera;
+
+fn spawn_player_camera(mut commands: Commands, players: Query<Entity, Added<LocalPlayerTag>>) {
+    let Ok(entity) = players.get_single() else {
+        return;
+    };
+
+    println!("spawning player camera");
+    commands.entity(entity).with_children(|parent| {
+        parent.spawn((
+            PlayerCameraTarget,
+            TransformBundle::from_transform(Transform::from_xyz(0.0, 0.5, 0.0)),
+        ));
+    });
+    commands.spawn((
+        PlayerCamera,
+        Camera3dBundle {
+            projection: PerspectiveProjection {
+                fov: 60.0_f32.to_radians(),
+                ..default()
+            }
+            .into(),
+            ..default()
+        },
+    ));
+}
+
+fn init_players(
+    mut player_init: EventReader<PlayerNeedsInit>,
+    mut commands: Commands,
+    mut server: ResMut<RenetServer>,
+    tick: Res<Tick>,
+) {
+    for init in player_init.read() {
+        let transform = Transform::from_xyz(0.0, 1.0, 0.0);
+        commands.spawn((
+            Player,
+            init.net_obj.clone(),
+            LastInputTracker::default(),
+            KinematicCharacterController::default(),
+            RigidBody::KinematicPositionBased,
+            Collider::capsule_y(0.5, 0.25),
+            TransformBundle::from_transform(transform),
+        ));
+
+        info!("sending player init");
+        let message = ReliableMessageFromServer::InitPlayer(PlayerInit {
+            net_obj: init.net_obj.clone(),
+            transform,
+            tick: tick.clone(),
+        });
+        let bytes = bincode::serialize(&message).unwrap();
+        server.send_message(init.client_id, DefaultChannel::ReliableUnordered, bytes);
     }
 }

@@ -24,10 +24,17 @@ pub struct Spawn {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
+pub struct PlayerInit {
+    pub net_obj: NetworkObject,
+    pub transform: Transform,
+    pub tick: Tick,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
 pub enum ReliableMessageFromServer {
     Spawn(Spawn),
     Despawn(NetworkObject),
-    SetPlayerNetworkObject(NetworkObject),
+    InitPlayer(PlayerInit),
     TickSync(TickSync),
 }
 
