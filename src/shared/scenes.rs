@@ -3,12 +3,17 @@ use bevy::{
 };
 use bevy_rapier3d::prelude::*;
 
-use super::render::{DEFAULT_RENDER_LAYER, VIEW_MODEL_RENDER_LAYER};
+use super::{
+    objects::NetworkObject,
+    render::{DEFAULT_RENDER_LAYER, VIEW_MODEL_RENDER_LAYER},
+};
 
 pub fn setup_scene_1(world: &mut World) {
     world.run_system_once(spawn_world_model);
     world.run_system_once(spawn_lights);
 }
+
+const BOX_OBJ: u64 = 1;
 
 fn spawn_world_model(
     mut commands: Commands,
@@ -35,7 +40,11 @@ fn spawn_world_model(
             transform: Transform::from_xyz(0.0, 0.25, -3.0),
             ..default()
         })
-        .insert((RigidBody::Fixed, Collider::cuboid(1.0, 0.5, 0.5)));
+        .insert((
+            RigidBody::Fixed,
+            Collider::cuboid(1.0, 0.5, 0.5),
+            NetworkObject::new_static(BOX_OBJ),
+        ));
 
     commands.spawn(MaterialMeshBundle {
         mesh: cube,

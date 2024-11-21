@@ -34,7 +34,14 @@ fn draw_raycast(
     }
 }
 
-pub fn spawn_raycast_visual(commands: &mut Commands, ray_pos: Vec3, ray_dir: Vec3, length: f32, color: impl Into<Color>, millis: u64) {
+pub fn spawn_raycast_visual(
+    commands: &mut Commands,
+    ray_pos: Vec3,
+    ray_dir: Vec3,
+    length: f32,
+    color: impl Into<Color>,
+    millis: u64,
+) {
     let to = ray_pos + (ray_dir * length);
     let cast = RaycastVisual {
         despawn_timer: Timer::new(Duration::from_millis(millis), TimerMode::Once),

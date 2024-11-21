@@ -2,7 +2,11 @@ use bevy::prelude::*;
 use bevy_renet::renet::{ClientId, DefaultChannel, RenetServer};
 use serde::{Deserialize, Serialize};
 
-use crate::shared::{objects::NetworkObject, tick::Tick, GameLogic};
+use crate::shared::{
+    objects::{player::Shot, NetworkObject},
+    tick::Tick,
+    GameLogic,
+};
 
 use super::{
     client::{ReliableMessageFromClient, UnreliableMessageFromClient},
@@ -50,6 +54,8 @@ pub struct PlayerPositionSync {
 pub enum UnreliableMessageFromServer {
     TransformSync(NetworkObject, Transform, Tick),
     PlayerPositionSync(PlayerPositionSync),
+    /// (Shooter, Shot)
+    PlayerShot(NetworkObject, Shot),
 }
 
 #[derive(Resource)]

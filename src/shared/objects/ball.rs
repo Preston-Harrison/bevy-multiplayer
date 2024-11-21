@@ -126,7 +126,7 @@ fn recv_ball_data(
             continue;
         };
         for (mut transform, obj, mut tracker) in query.iter_mut() {
-            if obj.id == net_obj.id {
+            if obj == net_obj {
                 if tracker.last_tick < *sync_tick {
                     *transform = *net_transform;
                     tracker.last_tick = sync_tick.clone();
@@ -175,7 +175,7 @@ fn random_balls(mut commands: Commands) {
         let z = rng.gen_range(-30..30) as f32;
         let mut e = commands.spawn(Ball);
         e.insert(Transform::from_xyz(x, y, z));
-        e.insert(NetworkObject::rand());
+        e.insert(NetworkObject::new_rand());
         if rng.gen_range(0..=1) == 1 {
             e.insert(MoveUp);
         }

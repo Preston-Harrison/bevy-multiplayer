@@ -1,8 +1,13 @@
 use std::collections::VecDeque;
 
-use bevy::{color::palettes::tailwind::{GREEN_500, YELLOW_500}, input::mouse::MouseMotion, prelude::*, utils::HashMap};
+use bevy::{
+    color::palettes::tailwind::{GREEN_500, YELLOW_500},
+    input::mouse::MouseMotion,
+    prelude::*,
+    utils::HashMap,
+};
 use bevy_rapier3d::prelude::*;
-use bevy_renet::renet::{DefaultChannel, RenetClient, RenetServer};
+use bevy_renet::renet::{ClientId, DefaultChannel, RenetClient, RenetServer};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -15,7 +20,7 @@ use crate::{
         spawn::NetworkSpawn,
     },
     server::{ClientNetworkObjectMap, PlayerNeedsInit, PlayerWantsUpdates},
-    shared::{tick::Tick, GameLogic},
+    shared::{console::ConsoleMessage, tick::Tick, GameLogic},
 };
 
 use super::{gizmo::spawn_raycast_visual, LastSyncTracker, NetworkObject};
@@ -46,7 +51,8 @@ impl Plugin for PlayerPlugin {
                 (
                     spawn_player_camera,
                     spawn_players.in_set(GameLogic::Spawn),
-                    recv_player_data.in_set(GameLogic::Sync),
+                    recv_position_sync.in_set(GameLogic::Sync),
+                    recv_player_shot.in_set(GameLogic::Sync),
                     read_input.in_set(GameLogic::Start),
                 ),
             );
@@ -65,9 +71,32 @@ impl Plugin for PlayerPlugin {
 pub struct LocalPlayer(pub NetworkObject);
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ShotTarget {
+    target: NetworkObject,
+    relative_position: Vec3,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ShotNothing {
+    vector: Vec3,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum Shot {
+    ShotTarget(ShotTarget),
+    ShotNothing(ShotNothing),
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Input {
     direction: Vec3,
-    shot: Option<NetworkObject>,
+    shot: Option<Shot>,
+}
+
+impl Input {
+    fn is_non_zero(&self) -> bool {
+        self.direction.length_squared() > (0.1 * 0.1) || self.shot.is_some()
+    }
 }
 
 #[derive(Resource, Default)]
@@ -101,19 +130,24 @@ impl InputBuffer {
     }
 }
 
+/// TODO: fix memory leaks as this doesn't clean up disconnected clients.
 #[derive(Resource, Default)]
-pub struct ClientInputs(HashMap<NetworkObject, Vec<OrderedInput>>);
+pub struct ClientInputs {
+    inputs: HashMap<NetworkObject, Vec<OrderedInput>>,
+    clients: HashMap<NetworkObject, ClientId>,
+}
 
 impl ClientInputs {
-    fn push_input(&mut self, net_obj: NetworkObject, input: OrderedInput) {
-        self.0.entry(net_obj).or_default().push(input);
+    fn push_input(&mut self, net_obj: NetworkObject, input: OrderedInput, client_id: ClientId) {
+        self.inputs.entry(net_obj.clone()).or_default().push(input);
+        self.clients.insert(net_obj, client_id);
     }
 
     /// Removes and returns the lowest-order input for each `NetworkObject`.
     fn pop_inputs(&mut self) -> HashMap<NetworkObject, OrderedInput> {
         let mut inputs = HashMap::new();
 
-        for (obj, ord_inputs) in self.0.iter_mut() {
+        for (obj, ord_inputs) in self.inputs.iter_mut() {
             if let Some((min_index, _)) = ord_inputs
                 .iter()
                 .enumerate()
@@ -130,7 +164,7 @@ impl ClientInputs {
     /// Ensures that each buffer in `ClientInputs` is no longer than `max_length`.
     /// Removes the input with the lowest order if the buffer exceeds the limit.
     fn prune(&mut self, max_length: usize) {
-        for (_, ord_inputs) in self.0.iter_mut() {
+        for (_, ord_inputs) in self.inputs.iter_mut() {
             while ord_inputs.len() > max_length {
                 if let Some((min_index, _)) = ord_inputs
                     .iter()
@@ -141,6 +175,10 @@ impl ClientInputs {
                 }
             }
         }
+    }
+
+    fn get_client_id(&self, net_obj: &NetworkObject) -> Option<ClientId> {
+        self.clients.get(net_obj).cloned()
     }
 }
 
@@ -219,7 +257,7 @@ fn broadcast_player_data(
     }
 }
 
-fn recv_player_data(
+fn recv_position_sync(
     reader: Res<MessageReaderOnClient>,
     mut query: Query<
         (
@@ -244,11 +282,11 @@ fn recv_player_data(
         for (entity, mut transform, obj, mut last_sync_tracker, shape, controller) in
             query.iter_mut()
         {
-            if obj.id == pos_sync.net_obj.id && last_sync_tracker.last_tick < pos_sync.tick {
+            if *obj == pos_sync.net_obj && last_sync_tracker.last_tick < pos_sync.tick {
                 last_sync_tracker.last_tick = pos_sync.tick.clone();
                 transform.translation = pos_sync.translation;
 
-                if pos_sync.net_obj.id == local_player.0.id {
+                if pos_sync.net_obj == local_player.0 {
                     let inputs = ibuf.inputs_after_order(pos_sync.last_input_order);
                     for input in inputs {
                         apply_input(
@@ -267,6 +305,58 @@ fn recv_player_data(
     }
 }
 
+fn recv_player_shot(
+    reader: Res<MessageReaderOnClient>,
+    mut commands: Commands,
+    player_query: Query<(&NetworkObject, &Transform), With<Player>>,
+    net_obj_query: Query<(&NetworkObject, &Transform)>,
+) {
+    for msg in reader.unreliable_messages() {
+        let UnreliableMessageFromServer::PlayerShot(shooter, shot) = msg else {
+            continue;
+        };
+        let shooter_pos = player_query
+            .iter()
+            .find(|(obj, _)| *obj == shooter)
+            .map(|(_, t)| t);
+        let Some(shooter_pos) = shooter_pos else {
+            continue;
+        };
+
+        match shot {
+            Shot::ShotNothing(shot) => spawn_raycast_visual(
+                &mut commands,
+                shooter_pos.translation,
+                // TODO: don't panic if this is zero.
+                shot.vector.normalize(),
+                shot.vector.length(),
+                YELLOW_500,
+                2000,
+            ),
+            Shot::ShotTarget(shot) => {
+                let target_pos = net_obj_query.iter().find(|(obj, _)| **obj == shot.target);
+                let Some((target_net_obj, target_pos)) = target_pos else {
+                    error!(
+                        "tried to recv shot for something that doesn't exist: {:?}",
+                        shot
+                    );
+                    continue;
+                };
+                let target_shot_pos = target_pos.translation + shot.relative_position;
+                let ray = target_shot_pos - shooter_pos.translation;
+                spawn_raycast_visual(
+                    &mut commands,
+                    shooter_pos.translation,
+                    ray.normalize(),
+                    ray.length(),
+                    GREEN_500,
+                    2000,
+                );
+            }
+        }
+    }
+}
+
 #[derive(Default)]
 struct PressedShootLastFrame(bool);
 
@@ -276,10 +366,11 @@ fn read_input(
     mut ibuf: ResMut<InputBuffer>,
     query: Query<(&Transform, Entity), With<LocalPlayerTag>>,
     camera: Query<&Transform, With<PlayerCamera>>,
-    net_objs: Query<&NetworkObject>,
+    net_objs: Query<(&NetworkObject, &Transform)>,
     mut client: ResMut<RenetClient>,
     context: Res<RapierContext>,
     mut commands: Commands,
+    mut console: EventWriter<ConsoleMessage>,
 ) {
     let Ok((player_transform, entity)) = query.get_single() else {
         error!("no player found when reading input");
@@ -316,18 +407,28 @@ fn read_input(
             QueryFilter::default().exclude_collider(entity),
         ) {
             spawn_raycast_visual(&mut commands, ray_pos, ray_dir, toi, GREEN_500, 2000);
+
             // TODO: handle if they shot something that wasn't a network object, e.g. the floor.
-            net_objs.get(entity).ok()
+            let impact_point = ray_pos + (ray_dir * toi);
+            net_objs.get(entity).ok().map(|(obj, transform)| {
+                let relative_position = impact_point - transform.translation;
+                Shot::ShotTarget(ShotTarget {
+                    target: obj.clone(),
+                    relative_position,
+                })
+            })
         } else {
             spawn_raycast_visual(&mut commands, ray_pos, ray_dir, max_toi, YELLOW_500, 2000);
-            None
+            Some(Shot::ShotNothing(ShotNothing {
+                vector: ray_dir * max_toi,
+            }))
         }
     } else {
         None
     };
 
-    if let Some(shot) = shot {
-        info!("you shot {:?}", shot);
+    if let Some(ref shot) = shot {
+        console.send(ConsoleMessage::new(format!("you shot {:?}", shot)));
     }
 
     if local_direction.length_squared() > 0.0 {
@@ -342,11 +443,11 @@ fn read_input(
         Vec3::ZERO
     };
 
-    if final_direction.length_squared() > 0.0 {
-        let input = Input {
-            direction: final_direction,
-            shot: shot.cloned(),
-        };
+    let input = Input {
+        direction: final_direction,
+        shot,
+    };
+    if input.is_non_zero() {
         let order = ibuf.push_input(input.clone());
         let message = UnreliableMessageFromClient::Input(OrderedInput { input, order });
         let bytes = bincode::serialize(&message).unwrap();
@@ -363,7 +464,7 @@ fn read_inputs(
     for (client_id, msg) in reader.unreliable_messages() {
         if let UnreliableMessageFromClient::Input(ordered_input) = msg {
             if let Some(net_obj) = client_netmap.0.get(client_id) {
-                inputs.push_input(net_obj.clone(), ordered_input.clone());
+                inputs.push_input(net_obj.clone(), ordered_input.clone(), *client_id);
             } else {
                 warn!("Unknown client_id: {}", client_id);
             }
@@ -388,12 +489,23 @@ fn apply_inputs(
     time: Res<Time>,
     mut inputs: ResMut<ClientInputs>,
     mut context: ResMut<RapierContext>,
+    mut server: ResMut<RenetServer>,
 ) {
     let net_obj_inputs = inputs.pop_inputs();
     for (entity, mut transform, net_obj, mut last_input_tracker, controller, shape) in
         query.iter_mut()
     {
         if let Some(input) = net_obj_inputs.get(net_obj) {
+            if let Some(shot) = &input.input.shot {
+                let Some(inputter) = inputs.get_client_id(net_obj) else {
+                    error!("input without client");
+                    continue;
+                };
+                let message =
+                    UnreliableMessageFromServer::PlayerShot(net_obj.clone(), shot.clone());
+                let bytes = bincode::serialize(&message).unwrap();
+                server.broadcast_message_except(inputter, DefaultChannel::Unreliable, bytes);
+            }
             apply_input(
                 &mut context,
                 &input.input,

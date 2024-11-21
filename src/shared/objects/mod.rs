@@ -10,8 +10,21 @@ pub mod gizmo;
 pub mod player;
 
 #[derive(Serialize, Deserialize, Component, Clone, Debug, Hash, PartialEq, Eq)]
-pub struct NetworkObject {
-    pub id: u64,
+pub enum NetworkObject {
+    Dynamic(u64),
+    Static(u64),
+}
+
+impl NetworkObject {
+    pub fn new_rand() -> Self {
+        let mut rng = rand::thread_rng();
+        let random_number: u64 = rng.gen();
+        Self::Dynamic(random_number)
+    }
+
+    pub fn new_static(id: u64) -> Self {
+        Self::Static(id)
+    }
 }
 
 #[derive(Component, Clone, Debug)]
@@ -26,13 +39,5 @@ impl<T> LastSyncTracker<T> {
             last_tick: tick,
             _component: PhantomData::default(),
         }
-    }
-}
-
-impl NetworkObject {
-    pub fn rand() -> Self {
-        let mut rng = rand::thread_rng();
-        let random_number: u64 = rng.gen();
-        Self { id: random_number }
     }
 }

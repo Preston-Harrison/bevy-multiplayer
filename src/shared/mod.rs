@@ -4,10 +4,12 @@ use bevy_renet::renet::{DefaultChannel, RenetServer};
 use crate::message::{client::MessageReaderOnClient, server::ReliableMessageFromServer};
 
 use self::{
+    console::ConsolePlugin,
     objects::{ball::BallPlugin, gizmo::GizmoPlugin, player::PlayerPlugin, NetworkObject},
     physics::PhysicsPlugin,
 };
 
+pub mod console;
 pub mod objects;
 pub mod physics;
 pub mod render;
@@ -47,7 +49,7 @@ fn despawn(
             continue;
         };
         for (e, obj) in query.iter() {
-            if obj.id == network_obj.id {
+            if obj == network_obj {
                 commands.entity(e).despawn();
                 break;
             }
@@ -70,6 +72,7 @@ impl Plugin for Game {
             },
             PhysicsPlugin,
             GizmoPlugin,
+            ConsolePlugin,
         ));
         if !self.is_server {
             app.add_systems(FixedUpdate, despawn.in_set(GameLogic::Spawn));

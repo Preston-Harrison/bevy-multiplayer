@@ -97,7 +97,7 @@ fn handle_server_events(
                 println!("Client {} disconnected: {:?}", client_id, reason);
                 if let Some(net_obj) = client_map.0.remove(client_id) {
                     for (entity, obj) in query.iter() {
-                        if obj.id == net_obj.id {
+                        if *obj == net_obj {
                             despawn_recursive_and_broadcast(
                                 &mut server,
                                 &mut commands,
@@ -139,7 +139,7 @@ fn handle_ready_game(
                 continue;
             }
             println!("sending player network object");
-            let net_obj = NetworkObject::rand();
+            let net_obj = NetworkObject::new_rand();
             client_map.0.insert(*client_id, net_obj.clone());
             player_inits.send(PlayerNeedsInit {
                 client_id: *client_id,
