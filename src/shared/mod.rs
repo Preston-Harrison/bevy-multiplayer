@@ -5,7 +5,10 @@ use crate::message::{client::MessageReaderOnClient, server::ReliableMessageFromS
 
 use self::{
     console::ConsolePlugin,
-    objects::{ball::BallPlugin, gizmo::GizmoPlugin, grounded::GroundedPlugin, player::PlayerPlugin, NetworkObject},
+    objects::{
+        ball::BallPlugin, gizmo::GizmoPlugin, grounded::GroundedPlugin, player::PlayerPlugin,
+        NetworkObject,
+    },
     physics::PhysicsPlugin,
 };
 

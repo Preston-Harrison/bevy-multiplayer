@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::{collections::VecDeque, time::Duration};
 
 use bevy::{
     color::palettes::tailwind::{GREEN_500, YELLOW_500},
@@ -31,7 +31,7 @@ use crate::{
 
 use super::{gizmo::spawn_raycast_visual, grounded::Grounded, LastSyncTracker, NetworkObject};
 
-const PREDICT: bool = false;
+const PREDICT: bool = true;
 const JUMP_KEY: &str = "jump";
 const JUMP_VELOCITY: Vec3 = Vec3::new(0.0, 10.0, 0.0);
 
@@ -43,8 +43,10 @@ impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             FixedUpdate,
-            cancel_jump_velocity_if_just_landed
-                .in_set(GameLogic::End),
+            (
+                cancel_jump_velocity_if_just_landed.in_set(GameLogic::End),
+                tick_jump_cooldown,
+            ),
         );
 
         if self.is_server {
@@ -79,6 +81,19 @@ impl Plugin for PlayerPlugin {
                     rubber_band_player_camera.after(rotate_player),
                 ),
             );
+        }
+    }
+}
+
+#[derive(Component, Default)]
+pub struct JumpCooldown {
+    timer: Timer,
+}
+
+impl JumpCooldown {
+    fn new() -> Self {
+        Self {
+            timer: Timer::new(Duration::from_millis(200), TimerMode::Once),
         }
     }
 }
@@ -344,20 +359,21 @@ fn recv_position_sync(
                     last_sync_tracker.last_tick = owned_sync.tick.clone();
                     transform.translation = owned_sync.translation;
                     *kinematics = owned_sync.kinematics.clone();
+                    // TODO: actual rollback
                     if PREDICT {
                         let inputs = ibuf.inputs_after_order(owned_sync.last_input_order);
                         for input in inputs {
-                            apply_input(
-                                &mut context,
-                                &input.input,
-                                &mut transform,
-                                shape,
-                                controller,
-                                &time,
-                                entity,
-                                &mut kinematics,
-                                &mut grounded,
-                            );
+                            // apply_input(
+                            //     &mut context,
+                            //     &input.input,
+                            //     &mut transform,
+                            //     shape,
+                            //     controller,
+                            //     &time,
+                            //     entity,
+                            //     &mut kinematics,
+                            //     &mut grounded,
+                            // );
                         }
                     }
                 }
@@ -386,22 +402,19 @@ fn recv_player_shot(
         };
 
         match shot {
-            Shot::ShotNothing(shot) => {
-                match shot.vector.try_normalize() {
-                    Some(vector) => {
-                        spawn_raycast_visual(
-                            &mut commands,
-                            shooter_pos.translation,
-                            // TODO: don't panic if this is zero.
-                            vector,
-                            shot.vector.length(),
-                            YELLOW_500,
-                            2000,
-                        );
-                    }
-                    _ => warn!("got zero valued shot vector"),
+            Shot::ShotNothing(shot) => match shot.vector.try_normalize() {
+                Some(vector) => {
+                    spawn_raycast_visual(
+                        &mut commands,
+                        shooter_pos.translation,
+                        vector,
+                        shot.vector.length(),
+                        YELLOW_500,
+                        2000,
+                    );
                 }
-            }
+                _ => warn!("got zero valued shot vector"),
+            },
             Shot::ShotTarget(shot) => {
                 let target_pos = net_obj_query
                     .iter()
@@ -545,6 +558,12 @@ fn read_inputs(
     inputs.prune(10);
 }
 
+fn tick_jump_cooldown(mut query: Query<&mut JumpCooldown>, time: Res<Time>) {
+    for mut cooldown in query.iter_mut() {
+        cooldown.timer.tick(time.delta());
+    }
+}
+
 fn apply_inputs(
     mut query: Query<
         (
@@ -556,6 +575,7 @@ fn apply_inputs(
             &Collider,
             &mut Kinematics,
             &mut Grounded,
+            &mut JumpCooldown,
         ),
         With<Player>,
     >,
@@ -574,6 +594,7 @@ fn apply_inputs(
         shape,
         mut kinematics,
         mut grounded,
+        mut jump_cooldown,
     ) in query.iter_mut()
     {
         if let Some(input) = net_obj_inputs.get(net_obj) {
@@ -597,6 +618,7 @@ fn apply_inputs(
                 entity,
                 &mut kinematics,
                 &mut grounded,
+                &mut jump_cooldown,
             );
             last_input_tracker.order = input.order;
         }
@@ -613,24 +635,19 @@ fn apply_input(
     curr_player: Entity,
     kinematics: &mut Kinematics,
     grounded: &mut Grounded,
+    jump_cooldown: &mut JumpCooldown,
 ) {
     let movement = input.direction * 5.0 * time.delta_seconds();
-    info!(
-        "applying input. input.jump={}, was_grounded={}, is_grounded={}",
-        input.jump,
-        grounded.was_grounded_last_tick(),
-        grounded.is_grounded
-    );
-    if input.jump && grounded.is_grounded {
+    if input.jump && grounded.grounded_this_tick() && jump_cooldown.timer.finished() {
+        info!("jumping");
         kinematics.set_velocity(JUMP_KEY, JUMP_VELOCITY);
-    } else if !grounded.was_grounded_last_tick() && grounded.is_grounded {
+        jump_cooldown.timer.reset();
+    } else if !grounded.was_grounded_last_tick() && grounded.grounded_this_tick() {
+        info!("cancelling");
         kinematics.set_velocity(JUMP_KEY, Vec3::ZERO);
     }
-    grounded.tick();
-    kinematics.accelerate(time.delta_seconds());
-    let k_movement = kinematics.get_displacement(time.delta_seconds());
     let out = context.move_shape(
-        movement + k_movement,
+        movement,
         shape,
         transform.translation,
         transform.rotation,
@@ -640,14 +657,14 @@ fn apply_input(
         |_| {},
     );
     transform.translation += out.effective_translation;
-    grounded.is_grounded = out.grounded;
+    grounded.set_is_grounded(out.grounded);
 }
 
 fn cancel_jump_velocity_if_just_landed(
-    mut query: Query<(&Grounded, &mut Kinematics), With<Player>>,
+    mut query: Query<(&Grounded, &mut Kinematics, &JumpCooldown), With<Player>>,
 ) {
-    for (grounded, mut kinematics) in query.iter_mut() {
-        if !grounded.was_grounded_last_tick() && grounded.is_grounded {
+    for (grounded, mut kinematics, jump_cooldown) in query.iter_mut() {
+        if grounded.grounded_this_tick() && jump_cooldown.timer.finished() {
             info!("setting to zero");
             kinematics.set_velocity(JUMP_KEY, Vec3::ZERO);
         }
@@ -768,6 +785,7 @@ fn init_players(
             TransformBundle::from_transform(transform),
             Kinematics::new().with_gravity(),
             Grounded::default(),
+            JumpCooldown::new(),
         ));
 
         info!("sending player init");

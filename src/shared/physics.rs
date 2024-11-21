@@ -74,7 +74,7 @@ const GRAVITY_KEY: &str = "gravity";
 
 fn cancel_gravity_if_grounded(mut kinematics: Query<(&mut Kinematics, &Grounded)>) {
     for (mut kinematics, grounded) in kinematics.iter_mut() {
-        if grounded.is_grounded {
+        if grounded.grounded_this_tick() {
             kinematics.set_velocity(GRAVITY_KEY, Vec3::ZERO);
         }
     }
