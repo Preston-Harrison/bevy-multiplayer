@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 
-use bevy::{input::mouse::MouseMotion, prelude::*, utils::HashMap};
+use bevy::{color::palettes::tailwind::{GREEN_500, YELLOW_500}, input::mouse::MouseMotion, prelude::*, utils::HashMap};
 use bevy_rapier3d::prelude::*;
 use bevy_renet::renet::{DefaultChannel, RenetClient, RenetServer};
 use serde::{Deserialize, Serialize};
@@ -18,7 +18,7 @@ use crate::{
     shared::{tick::Tick, GameLogic},
 };
 
-use super::{LastSyncTracker, NetworkObject};
+use super::{gizmo::spawn_raycast_visual, LastSyncTracker, NetworkObject};
 
 pub struct PlayerPlugin {
     pub is_server: bool,
@@ -67,6 +67,7 @@ pub struct LocalPlayer(pub NetworkObject);
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Input {
     direction: Vec3,
+    shot: Option<NetworkObject>,
 }
 
 #[derive(Resource, Default)]
@@ -266,13 +267,21 @@ fn recv_player_data(
     }
 }
 
+#[derive(Default)]
+struct PressedShootLastFrame(bool);
+
 fn read_input(
+    mut pressed_shoot: Local<PressedShootLastFrame>,
     keyboard_input: Res<ButtonInput<KeyCode>>,
     mut ibuf: ResMut<InputBuffer>,
-    query: Query<&Transform, With<LocalPlayerTag>>,
+    query: Query<(&Transform, Entity), With<LocalPlayerTag>>,
+    camera: Query<&Transform, With<PlayerCamera>>,
+    net_objs: Query<&NetworkObject>,
     mut client: ResMut<RenetClient>,
+    context: Res<RapierContext>,
+    mut commands: Commands,
 ) {
-    let Ok(player_transform) = query.get_single() else {
+    let Ok((player_transform, entity)) = query.get_single() else {
         error!("no player found when reading input");
         return;
     };
@@ -290,6 +299,36 @@ fn read_input(
     if keyboard_input.pressed(KeyCode::KeyD) {
         local_direction += Vec3::X;
     }
+    let pressed_shoot_last_frame = pressed_shoot.0;
+    pressed_shoot.0 = keyboard_input.pressed(KeyCode::Space);
+    let shoot = !pressed_shoot_last_frame && pressed_shoot.0;
+
+    let shot = if shoot {
+        let camera = camera.single();
+        let ray_pos = camera.translation;
+        let ray_dir = *camera.forward();
+        let max_toi = 10.0;
+        if let Some((entity, toi)) = context.cast_ray(
+            ray_pos,
+            ray_dir,
+            max_toi,
+            false,
+            QueryFilter::default().exclude_collider(entity),
+        ) {
+            spawn_raycast_visual(&mut commands, ray_pos, ray_dir, toi, GREEN_500, 2000);
+            // TODO: handle if they shot something that wasn't a network object, e.g. the floor.
+            net_objs.get(entity).ok()
+        } else {
+            spawn_raycast_visual(&mut commands, ray_pos, ray_dir, max_toi, YELLOW_500, 2000);
+            None
+        }
+    } else {
+        None
+    };
+
+    if let Some(shot) = shot {
+        info!("you shot {:?}", shot);
+    }
 
     if local_direction.length_squared() > 0.0 {
         local_direction = local_direction.normalize();
@@ -306,6 +345,7 @@ fn read_input(
     if final_direction.length_squared() > 0.0 {
         let input = Input {
             direction: final_direction,
+            shot: shot.cloned(),
         };
         let order = ibuf.push_input(input.clone());
         let message = UnreliableMessageFromClient::Input(OrderedInput { input, order });

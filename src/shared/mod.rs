@@ -4,7 +4,7 @@ use bevy_renet::renet::{DefaultChannel, RenetServer};
 use crate::message::{client::MessageReaderOnClient, server::ReliableMessageFromServer};
 
 use self::{
-    objects::{ball::BallPlugin, player::PlayerPlugin, NetworkObject},
+    objects::{ball::BallPlugin, gizmo::GizmoPlugin, player::PlayerPlugin, NetworkObject},
     physics::PhysicsPlugin,
 };
 
@@ -69,6 +69,7 @@ impl Plugin for Game {
                 is_server: self.is_server,
             },
             PhysicsPlugin,
+            GizmoPlugin,
         ));
         if !self.is_server {
             app.add_systems(FixedUpdate, despawn.in_set(GameLogic::Spawn));
