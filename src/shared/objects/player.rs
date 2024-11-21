@@ -324,15 +324,22 @@ fn recv_player_shot(
         };
 
         match shot {
-            Shot::ShotNothing(shot) => spawn_raycast_visual(
-                &mut commands,
-                shooter_pos.translation,
-                // TODO: don't panic if this is zero.
-                shot.vector.normalize(),
-                shot.vector.length(),
-                YELLOW_500,
-                2000,
-            ),
+            Shot::ShotNothing(shot) => {
+                match shot.vector.try_normalize() {
+                    Some(vector) => {
+                        spawn_raycast_visual(
+                            &mut commands,
+                            shooter_pos.translation,
+                            // TODO: don't panic if this is zero.
+                            vector.normalize(),
+                            vector.length(),
+                            YELLOW_500,
+                            2000,
+                        );
+                    }
+                    _ => warn!("got zero valued shot vector"),
+                }
+            }
             Shot::ShotTarget(shot) => {
                 let target_pos = net_obj_query
                     .iter()
