@@ -334,12 +334,12 @@ fn recv_player_shot(
                 2000,
             ),
             Shot::ShotTarget(shot) => {
-                let target_pos = net_obj_query.iter().find(|(obj, _)| **obj == shot.target);
-                let Some((target_net_obj, target_pos)) = target_pos else {
-                    error!(
-                        "tried to recv shot for something that doesn't exist: {:?}",
-                        shot
-                    );
+                let target_pos = net_obj_query
+                    .iter()
+                    .find(|(obj, _)| **obj == shot.target)
+                    .map(|(_, t)| t);
+                let Some(target_pos) = target_pos else {
+                    error!("tried to recv shot for non existant: {:?}", shot);
                     continue;
                 };
                 let target_shot_pos = target_pos.translation + shot.relative_position;
