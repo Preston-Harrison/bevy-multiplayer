@@ -4,7 +4,8 @@ use bevy::{
     color::palettes::tailwind::{GREEN_500, YELLOW_500},
     input::mouse::MouseMotion,
     prelude::*,
-    utils::HashMap, window::{CursorGrabMode, PrimaryWindow},
+    utils::HashMap,
+    window::{CursorGrabMode, PrimaryWindow},
 };
 use bevy_rapier3d::prelude::*;
 use bevy_renet::renet::{ClientId, DefaultChannel, RenetClient, RenetServer};
@@ -20,7 +21,12 @@ use crate::{
         spawn::NetworkSpawn,
     },
     server::{ClientNetworkObjectMap, PlayerNeedsInit, PlayerWantsUpdates},
-    shared::{console::ConsoleMessage, tick::Tick, GameLogic},
+    shared::{
+        console::ConsoleMessage,
+        physics::{char_ctrl_to_move_opts, Gravity},
+        tick::Tick,
+        GameLogic,
+    },
 };
 
 use super::{gizmo::spawn_raycast_visual, LastSyncTracker, NetworkObject};
@@ -544,17 +550,7 @@ fn apply_input(
         transform.translation,
         transform.rotation,
         0f32,
-        &MoveShapeOptions {
-            up: char_controller.up,
-            offset: char_controller.offset,
-            slide: char_controller.slide,
-            autostep: char_controller.autostep,
-            max_slope_climb_angle: char_controller.max_slope_climb_angle,
-            min_slope_slide_angle: char_controller.min_slope_slide_angle,
-            apply_impulse_to_dynamic_bodies: char_controller.apply_impulse_to_dynamic_bodies,
-            snap_to_ground: char_controller.snap_to_ground,
-            normal_nudge_factor: char_controller.normal_nudge_factor,
-        },
+        &char_ctrl_to_move_opts(char_controller),
         QueryFilter::default().exclude_collider(curr_player),
         |_| {},
     );
@@ -673,6 +669,7 @@ fn init_players(
             RigidBody::KinematicPositionBased,
             Collider::capsule_y(0.5, 0.25),
             TransformBundle::from_transform(transform),
+            Gravity::default(),
         ));
 
         info!("sending player init");

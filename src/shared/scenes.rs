@@ -27,24 +27,28 @@ fn spawn_world_model(
     // The world model camera will render the floor and the cubes spawned in this system.
     // Assigning no `RenderLayers` component defaults to layer 0.
 
-    commands.spawn(MaterialMeshBundle {
-        mesh: floor,
-        material: material.clone(),
-        ..default()
-    });
+    commands.spawn((
+        MaterialMeshBundle {
+            mesh: floor,
+            material: material.clone(),
+            transform: Transform::from_xyz(0.0, -1.0, 0.0),
+            ..default()
+        },
+        RigidBody::Fixed,
+        Collider::cuboid(10.0, 0.1, 10.0),
+    ));
 
-    commands
-        .spawn(MaterialMeshBundle {
+    commands.spawn((
+        MaterialMeshBundle {
             mesh: cube.clone(),
             material: material.clone(),
             transform: Transform::from_xyz(0.0, 0.25, -3.0),
             ..default()
-        })
-        .insert((
-            RigidBody::Fixed,
-            Collider::cuboid(1.0, 0.5, 0.5),
-            NetworkObject::new_static(BOX_OBJ),
-        ));
+        },
+        RigidBody::Fixed,
+        Collider::cuboid(1.0, 0.5, 0.5),
+        NetworkObject::new_static(BOX_OBJ),
+    ));
 
     commands.spawn(MaterialMeshBundle {
         mesh: cube,
