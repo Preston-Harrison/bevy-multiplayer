@@ -144,8 +144,12 @@ fn handle_ready_game(
             }
             println!("sending player network object");
             let net_obj = NetworkObject::new_rand();
-            client_map.client_to_net_obj.insert(*client_id, net_obj.clone());
-            client_map.net_obj_to_client.insert(net_obj.clone(), *client_id);
+            client_map
+                .client_to_net_obj
+                .insert(*client_id, net_obj.clone());
+            client_map
+                .net_obj_to_client
+                .insert(net_obj.clone(), *client_id);
             player_inits.send(PlayerNeedsInit {
                 client_id: *client_id,
                 net_obj,

@@ -15,7 +15,8 @@ use crate::{
     message::{
         client::{MessageReaderOnClient, OrderedInput, UnreliableMessageFromClient},
         server::{
-            self, OwnedPlayerSync, PlayerInit, PlayerPositionSync, ReliableMessageFromServer, Spawn, UnreliableMessageFromServer
+            self, OwnedPlayerSync, PlayerInit, PlayerPositionSync, ReliableMessageFromServer,
+            Spawn, UnreliableMessageFromServer,
         },
         spawn::NetworkSpawn,
     },
@@ -305,9 +306,7 @@ fn recv_position_sync(
     for msg in reader.unreliable_messages() {
         match msg {
             UnreliableMessageFromServer::PlayerPositionSync(pos_sync) => {
-                for (mut transform, obj, mut last_sync_tracker) in
-                    nonlocal_players.iter_mut()
-                {
+                for (mut transform, obj, mut last_sync_tracker) in nonlocal_players.iter_mut() {
                     if *obj == pos_sync.net_obj && last_sync_tracker.last_tick < pos_sync.tick {
                         last_sync_tracker.last_tick = pos_sync.tick.clone();
                         transform.translation = pos_sync.translation;
