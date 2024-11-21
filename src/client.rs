@@ -1,4 +1,6 @@
+use bevy::input::mouse::MouseButtonInput;
 use bevy::prelude::*;
+use bevy::window::{CursorGrabMode, PrimaryWindow};
 use bevy_rapier3d::prelude::*;
 use bevy_renet::renet::transport::{ClientAuthentication, NetcodeClientTransport};
 use bevy_renet::renet::{ConnectionConfig, DefaultChannel, RenetClient};
@@ -41,6 +43,10 @@ pub fn run() {
                 set_local_player.run_if(in_state(LoadState::RemoteLoading)),
             )
                 .in_set(MessagesAvailable),
+        )
+        .add_systems(
+            Update,
+            (cursor_grab, toggle_cursor_grab).run_if(in_state(LoadState::Done))
         )
         .insert_state(shared::AppState::MainMenu)
         .add_plugins((
@@ -231,5 +237,31 @@ fn set_local_player(
         app_state.set(AppState::InGame);
         load_state.set(LoadState::Done);
         commands.entity(ui_camera.single()).despawn_recursive();
+    }
+}
+
+fn cursor_grab(
+    buttons: Res<ButtonInput<MouseButton>>,
+    mut q_windows: Query<&mut Window, With<PrimaryWindow>>,
+) {
+    if buttons.just_pressed(MouseButton::Left) {
+        let mut primary_window = q_windows.single_mut();
+
+        // for a game that doesn't use the cursor (like a shooter):
+        // use `Locked` mode to keep the cursor in one place
+        primary_window.cursor.grab_mode = CursorGrabMode::Locked;
+        primary_window.cursor.visible = false;
+    }
+}
+
+fn toggle_cursor_grab(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut q_windows: Query<&mut Window, With<PrimaryWindow>>,
+) {
+    if keys.just_pressed(KeyCode::Escape) {
+        let mut primary_window = q_windows.single_mut();
+
+        primary_window.cursor.grab_mode = CursorGrabMode::None;
+        primary_window.cursor.visible = true;
     }
 }

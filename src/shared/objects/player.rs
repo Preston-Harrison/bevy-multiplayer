@@ -4,7 +4,7 @@ use bevy::{
     color::palettes::tailwind::{GREEN_500, YELLOW_500},
     input::mouse::MouseMotion,
     prelude::*,
-    utils::HashMap,
+    utils::HashMap, window::{CursorGrabMode, PrimaryWindow},
 };
 use bevy_rapier3d::prelude::*;
 use bevy_renet::renet::{ClientId, DefaultChannel, RenetClient, RenetServer};
@@ -331,8 +331,8 @@ fn recv_player_shot(
                             &mut commands,
                             shooter_pos.translation,
                             // TODO: don't panic if this is zero.
-                            vector.normalize(),
-                            vector.length(),
+                            vector,
+                            shot.vector.length(),
                             YELLOW_500,
                             2000,
                         );
@@ -369,6 +369,7 @@ struct PressedShootLastFrame(bool);
 
 fn read_input(
     mut pressed_shoot: Local<PressedShootLastFrame>,
+    mouse_input: Res<ButtonInput<MouseButton>>,
     keyboard_input: Res<ButtonInput<KeyCode>>,
     mut ibuf: ResMut<InputBuffer>,
     query: Query<(&Transform, Entity), With<LocalPlayerTag>>,
@@ -398,7 +399,7 @@ fn read_input(
         local_direction += Vec3::X;
     }
     let pressed_shoot_last_frame = pressed_shoot.0;
-    pressed_shoot.0 = keyboard_input.pressed(KeyCode::Space);
+    pressed_shoot.0 = mouse_input.pressed(MouseButton::Left);
     let shoot = !pressed_shoot_last_frame && pressed_shoot.0;
 
     let shot = if shoot {
@@ -564,7 +565,12 @@ fn rotate_player(
     mut mouse_motion: EventReader<MouseMotion>,
     mut player: Query<&mut Transform, (With<LocalPlayerTag>, Without<PlayerCameraTarget>)>,
     mut camera: Query<&mut Transform, (With<PlayerCameraTarget>, Without<LocalPlayerTag>)>,
+    q_windows: Query<&Window, With<PrimaryWindow>>,
 ) {
+    let primary_window = q_windows.single();
+    if primary_window.cursor.grab_mode != CursorGrabMode::Locked {
+        return;
+    }
     let Ok(mut transform) = player.get_single_mut() else {
         return;
     };
