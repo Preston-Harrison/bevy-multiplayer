@@ -5,7 +5,7 @@ use crate::message::{client::MessageReaderOnClient, server::ReliableMessageFromS
 
 use self::{
     console::ConsolePlugin,
-    objects::{ball::BallPlugin, gizmo::GizmoPlugin, player::PlayerPlugin, NetworkObject},
+    objects::{ball::BallPlugin, gizmo::GizmoPlugin, grounded::GroundedPlugin, player::PlayerPlugin, NetworkObject},
     physics::PhysicsPlugin,
 };
 
@@ -74,6 +74,7 @@ impl Plugin for Game {
             PhysicsPlugin,
             GizmoPlugin,
             ConsolePlugin,
+            GroundedPlugin,
         ));
         if !self.is_server {
             app.add_systems(FixedUpdate, despawn.in_set(GameLogic::Spawn));

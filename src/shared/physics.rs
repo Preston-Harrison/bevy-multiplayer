@@ -1,5 +1,6 @@
 use bevy::{prelude::*, utils::HashMap};
 use bevy_rapier3d::prelude::*;
+use serde::{Deserialize, Serialize};
 
 use super::{
     objects::{
@@ -28,7 +29,8 @@ impl Plugin for PhysicsPlugin {
     }
 }
 
-#[derive(Component)]
+/// TODO make this serialize into smaller bytes.
+#[derive(Component, Serialize, Deserialize, Debug, Clone)]
 pub struct Kinematics {
     velocity: HashMap<String, Vec3>,
     acceleration: HashMap<String, Vec3>,
@@ -55,14 +57,14 @@ impl Kinematics {
         self.acceleration.insert(name.into(), value);
     }
 
-    fn accelerate(&mut self, seconds: f32) {
+    pub fn accelerate(&mut self, seconds: f32) {
         for (k, v) in self.acceleration.iter() {
             let velocity = self.velocity.entry(k.clone()).or_default();
             *velocity += *v * seconds;
         }
     }
 
-    fn get_displacement(&self, seconds: f32) -> Vec3 {
+    pub fn get_displacement(&self, seconds: f32) -> Vec3 {
         self.velocity.values().sum::<Vec3>() * seconds
     }
 }

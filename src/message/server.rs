@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::shared::{
     objects::{player::Shot, NetworkObject},
+    physics::Kinematics,
     tick::Tick,
     GameLogic,
 };
@@ -53,9 +54,9 @@ pub struct PlayerPositionSync {
 pub struct OwnedPlayerSync {
     pub net_obj: NetworkObject,
     pub translation: Vec3,
-    pub jump_velocity: Vec3,
     pub tick: Tick,
     pub last_input_order: u64,
+    pub kinematics: Kinematics,
 }
 
 #[derive(Serialize, Deserialize, Debug)]

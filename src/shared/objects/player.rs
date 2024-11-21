@@ -29,11 +29,11 @@ use crate::{
     },
 };
 
-use super::{
-    gizmo::spawn_raycast_visual,
-    grounded::{set_grounded, Grounded},
-    LastSyncTracker, NetworkObject,
-};
+use super::{gizmo::spawn_raycast_visual, grounded::Grounded, LastSyncTracker, NetworkObject};
+
+const PREDICT: bool = false;
+const JUMP_KEY: &str = "jump";
+const JUMP_VELOCITY: Vec3 = Vec3::new(0.0, 10.0, 0.0);
 
 pub struct PlayerPlugin {
     pub is_server: bool,
@@ -41,6 +41,12 @@ pub struct PlayerPlugin {
 
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
+        app.add_systems(
+            FixedUpdate,
+            cancel_jump_velocity_if_just_landed
+                .in_set(GameLogic::End),
+        );
+
         if self.is_server {
             app.insert_resource(ClientInputs::default());
             app.add_systems(
@@ -100,12 +106,13 @@ pub enum Shot {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Input {
     direction: Vec3,
+    jump: bool,
     shot: Option<Shot>,
 }
 
 impl Input {
     fn is_non_zero(&self) -> bool {
-        self.direction.length_squared() > (0.1 * 0.1) || self.shot.is_some()
+        self.direction.length_squared() > (0.1 * 0.1) || self.shot.is_some() || self.jump
     }
 }
 
@@ -251,12 +258,12 @@ fn spawn_players(
 }
 
 fn broadcast_player_data(
-    query: Query<(&NetworkObject, &Transform, &LastInputTracker), With<Player>>,
+    query: Query<(&NetworkObject, &Transform, &LastInputTracker, &Kinematics), With<Player>>,
     client_netmap: Res<ClientNetworkObjectMap>,
     mut server: ResMut<RenetServer>,
     tick: Res<Tick>,
 ) {
-    for (obj, transform, input_tracker) in query.iter() {
+    for (obj, transform, input_tracker, kinematics) in query.iter() {
         let Some(client_id) = client_netmap.net_obj_to_client.get(obj) else {
             warn!("no client id for player obj in broadcast_player_data");
             continue;
@@ -274,7 +281,7 @@ fn broadcast_player_data(
             net_obj: obj.clone(),
             translation: transform.translation.clone(),
             tick: tick.clone(),
-            jump_velocity: Vec3::ZERO, // TODO
+            kinematics: kinematics.clone(),
             last_input_order: input_tracker.order,
         });
         let bytes = bincode::serialize(&message).unwrap();
@@ -300,7 +307,8 @@ fn recv_position_sync(
             &mut LastSyncTracker<Transform>,
             &Collider,
             &KinematicCharacterController,
-            Option<&mut Grounded>,
+            &mut Grounded,
+            &mut Kinematics,
         ),
         (With<Player>, With<LocalPlayerTag>),
     >,
@@ -330,22 +338,27 @@ fn recv_position_sync(
                     shape,
                     controller,
                     mut grounded,
+                    mut kinematics,
                 ) = record;
                 if *obj == owned_sync.net_obj && last_sync_tracker.last_tick < owned_sync.tick {
                     last_sync_tracker.last_tick = owned_sync.tick.clone();
                     transform.translation = owned_sync.translation;
-                    let inputs = ibuf.inputs_after_order(owned_sync.last_input_order);
-                    for input in inputs {
-                        apply_input(
-                            &mut context,
-                            &input.input,
-                            &mut transform,
-                            shape,
-                            controller,
-                            &time,
-                            entity,
-                            &mut grounded,
-                        );
+                    *kinematics = owned_sync.kinematics.clone();
+                    if PREDICT {
+                        let inputs = ibuf.inputs_after_order(owned_sync.last_input_order);
+                        for input in inputs {
+                            apply_input(
+                                &mut context,
+                                &input.input,
+                                &mut transform,
+                                shape,
+                                controller,
+                                &time,
+                                entity,
+                                &mut kinematics,
+                                &mut grounded,
+                            );
+                        }
                     }
                 }
             }
@@ -502,6 +515,7 @@ fn read_input(
 
     let input = Input {
         direction: final_direction,
+        jump: keyboard_input.pressed(KeyCode::Space),
         shot,
     };
     if input.is_non_zero() {
@@ -540,7 +554,8 @@ fn apply_inputs(
             &mut LastInputTracker,
             &KinematicCharacterController,
             &Collider,
-            Option<&mut Grounded>,
+            &mut Kinematics,
+            &mut Grounded,
         ),
         With<Player>,
     >,
@@ -550,8 +565,16 @@ fn apply_inputs(
     mut server: ResMut<RenetServer>,
 ) {
     let net_obj_inputs = inputs.pop_inputs();
-    for (entity, mut transform, net_obj, mut last_input_tracker, controller, shape, mut grounded) in
-        query.iter_mut()
+    for (
+        entity,
+        mut transform,
+        net_obj,
+        mut last_input_tracker,
+        controller,
+        shape,
+        mut kinematics,
+        mut grounded,
+    ) in query.iter_mut()
     {
         if let Some(input) = net_obj_inputs.get(net_obj) {
             if let Some(shot) = &input.input.shot {
@@ -572,6 +595,7 @@ fn apply_inputs(
                 controller,
                 &time,
                 entity,
+                &mut kinematics,
                 &mut grounded,
             );
             last_input_tracker.order = input.order;
@@ -587,11 +611,26 @@ fn apply_input(
     char_controller: &KinematicCharacterController,
     time: &Time,
     curr_player: Entity,
-    grounded: &mut Option<Mut<Grounded>>,
+    kinematics: &mut Kinematics,
+    grounded: &mut Grounded,
 ) {
-    let movement = input.direction * 5.0;
+    let movement = input.direction * 5.0 * time.delta_seconds();
+    info!(
+        "applying input. input.jump={}, was_grounded={}, is_grounded={}",
+        input.jump,
+        grounded.was_grounded_last_tick(),
+        grounded.is_grounded
+    );
+    if input.jump && grounded.is_grounded {
+        kinematics.set_velocity(JUMP_KEY, JUMP_VELOCITY);
+    } else if !grounded.was_grounded_last_tick() && grounded.is_grounded {
+        kinematics.set_velocity(JUMP_KEY, Vec3::ZERO);
+    }
+    grounded.tick();
+    kinematics.accelerate(time.delta_seconds());
+    let k_movement = kinematics.get_displacement(time.delta_seconds());
     let out = context.move_shape(
-        movement * time.delta_seconds(),
+        movement + k_movement,
         shape,
         transform.translation,
         transform.rotation,
@@ -601,7 +640,18 @@ fn apply_input(
         |_| {},
     );
     transform.translation += out.effective_translation;
-    set_grounded(grounded, out.grounded);
+    grounded.is_grounded = out.grounded;
+}
+
+fn cancel_jump_velocity_if_just_landed(
+    mut query: Query<(&Grounded, &mut Kinematics), With<Player>>,
+) {
+    for (grounded, mut kinematics) in query.iter_mut() {
+        if !grounded.was_grounded_last_tick() && grounded.is_grounded {
+            info!("setting to zero");
+            kinematics.set_velocity(JUMP_KEY, Vec3::ZERO);
+        }
+    }
 }
 
 fn rotate_player(
