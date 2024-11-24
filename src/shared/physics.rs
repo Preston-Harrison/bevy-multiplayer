@@ -95,27 +95,49 @@ fn apply_kinematics(
     time: Res<Time>,
 ) {
     let local_player_tag = player.get_single().ok();
-    for (entity, net_obj, controller, mut transform, collider, mut velocity, mut grounded) in
+    for (entity, net_obj, controller, mut transform, collider, mut kinematics, grounded) in
         query.iter_mut()
     {
         if local_player_tag.is_some_and(|tag| tag != net_obj) {
             continue;
         }
-        velocity.accelerate(time.delta_seconds());
-        let movement = velocity.get_displacement(time.delta_seconds());
-        let output = context.move_shape(
-            movement,
+        _apply_kinematics(
+            &mut context,
+            entity,
+            controller,
+            &mut transform,
             collider,
-            transform.translation,
-            transform.rotation,
-            0.0,
-            &char_ctrl_to_move_opts(controller),
-            QueryFilter::default().exclude_collider(entity),
-            |_| {},
+            &mut kinematics,
+            grounded,
+            &time,
         );
-        set_grounded(&mut grounded, output.grounded);
-        transform.translation += output.effective_translation;
     }
+}
+
+pub fn _apply_kinematics(
+    context: &mut RapierContext,
+    entity: Entity,
+    controller: &KinematicCharacterController,
+    transform: &mut Transform,
+    collider: &Collider,
+    kinematics: &mut Kinematics,
+    mut grounded: Option<Mut<Grounded>>,
+    time: &Time,
+) {
+    kinematics.accelerate(time.delta_seconds());
+    let movement = kinematics.get_displacement(time.delta_seconds());
+    let output = context.move_shape(
+        movement,
+        collider,
+        transform.translation,
+        transform.rotation,
+        0.0,
+        &char_ctrl_to_move_opts(controller),
+        QueryFilter::default().exclude_collider(entity),
+        |_| {},
+    );
+    set_grounded(&mut grounded, output.grounded);
+    transform.translation += output.effective_translation;
 }
 
 pub fn char_ctrl_to_move_opts(char_controller: &KinematicCharacterController) -> MoveShapeOptions {
