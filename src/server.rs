@@ -75,7 +75,7 @@ impl Plugin for Server {
 fn setup(mut commands: Commands) {
     commands
         .spawn(Camera3dBundle::default())
-        .insert(Transform::from_xyz(20.0, 20.0, 20.0).looking_at(Vec3::ZERO, Vec3::Y));
+        .insert(Transform::from_xyz(10.0, 10.0, 10.0).looking_at(Vec3::ZERO, Vec3::Y));
 }
 
 #[derive(Resource, Default)]

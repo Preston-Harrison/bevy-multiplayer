@@ -13,8 +13,10 @@ use crate::message::client::{MessageReaderOnClient, ReliableMessageFromClient};
 use crate::message::server::ReliableMessageFromServer;
 use crate::message::MessagesAvailable;
 use crate::shared::objects::grounded::Grounded;
-use crate::shared::objects::player::{LocalPlayer, LocalPlayerTag, Player};
-use crate::shared::objects::LastSyncTracker;
+use crate::shared::objects::player::{
+    JumpCooldown, LocalPlayer, LocalPlayerTag, Player,
+};
+use crate::shared::objects::{self, LastSyncTracker};
 use crate::shared::physics::Kinematics;
 use crate::shared::tick::get_client_tick;
 use crate::shared::AppState;
@@ -209,19 +211,7 @@ fn set_local_player(
                 println!("set local player");
                 server_info.set_player_obj = true;
                 commands.insert_resource(LocalPlayer(player_info.net_obj.clone()));
-                commands
-                    .spawn(Player)
-                    .insert(Kinematics::new().with_gravity())
-                    .insert(LastSyncTracker::<Transform>::new(player_info.tick.clone()))
-                    .insert((
-                        KinematicCharacterController::default(),
-                        RigidBody::KinematicPositionBased,
-                        Collider::capsule_y(0.5, 0.25),
-                        TransformBundle::from_transform(player_info.transform),
-                    ))
-                    .insert(Grounded::default())
-                    .insert(player_info.net_obj.clone())
-                    .insert(LocalPlayerTag);
+                objects::player::client::spawn_player(&mut commands, player_info);
             }
             ReliableMessageFromServer::TickSync(sync) => {
                 let tick = get_client_tick(sync.tick, sync.unix_millis);

@@ -25,7 +25,7 @@ pub struct Grounded {
 
 impl Grounded {
     pub fn tick(&mut self) {
-        self.grounded_last_tick = self.is_grounded;
+        self.grounded_last_tick = self.grounded_this_tick;
         self.grounded_this_tick = self.is_grounded;
     }
 
@@ -53,7 +53,7 @@ fn set_grounded_last_frame(mut query: Query<&mut Grounded>) {
     }
 }
 
-pub fn set_grounded(grounded: &mut Option<Mut<Grounded>>, is_grounded: bool) {
+pub fn set_grounded(mut grounded: Option<&mut Grounded>, is_grounded: bool) {
     if let Some(ref mut grounded) = grounded {
         grounded.set_is_grounded(is_grounded)
     }

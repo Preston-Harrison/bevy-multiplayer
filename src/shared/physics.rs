@@ -20,10 +20,10 @@ impl Plugin for PhysicsPlugin {
         app.add_systems(
             FixedUpdate,
             (
-                apply_kinematics.in_set(GameLogic::Kinematics),
+                apply_kinematics_system.in_set(GameLogic::Kinematics),
                 cancel_gravity_if_grounded
                     .in_set(GameLogic::Kinematics)
-                    .before(apply_kinematics),
+                    .before(apply_kinematics_system),
             ),
         );
     }
@@ -80,7 +80,7 @@ fn cancel_gravity_if_grounded(mut kinematics: Query<(&mut Kinematics, &Grounded)
     }
 }
 
-fn apply_kinematics(
+fn apply_kinematics_system(
     mut context: ResMut<RapierContext>,
     player: Query<&NetworkObject, With<LocalPlayerTag>>,
     mut query: Query<(
@@ -95,33 +95,33 @@ fn apply_kinematics(
     time: Res<Time>,
 ) {
     let local_player_tag = player.get_single().ok();
-    for (entity, net_obj, controller, mut transform, collider, mut kinematics, grounded) in
+    for (entity, net_obj, controller, mut transform, collider, mut kinematics, mut grounded) in
         query.iter_mut()
     {
         if local_player_tag.is_some_and(|tag| tag != net_obj) {
             continue;
         }
-        _apply_kinematics(
+        apply_kinematics(
             &mut context,
             entity,
             controller,
             &mut transform,
             collider,
             &mut kinematics,
-            grounded,
+            grounded.as_deref_mut(),
             &time,
         );
     }
 }
 
-pub fn _apply_kinematics(
+pub fn apply_kinematics(
     context: &mut RapierContext,
     entity: Entity,
     controller: &KinematicCharacterController,
     transform: &mut Transform,
     collider: &Collider,
     kinematics: &mut Kinematics,
-    mut grounded: Option<Mut<Grounded>>,
+    grounded: Option<&mut Grounded>,
     time: &Time,
 ) {
     kinematics.accelerate(time.delta_seconds());
@@ -136,7 +136,7 @@ pub fn _apply_kinematics(
         QueryFilter::default().exclude_collider(entity),
         |_| {},
     );
-    set_grounded(&mut grounded, output.grounded);
+    set_grounded(grounded, output.grounded);
     transform.translation += output.effective_translation;
 }
 

@@ -15,9 +15,9 @@ use super::GameLogic;
 pub struct Tick(u64);
 
 #[derive(Resource)]
-pub struct TickTimer(Timer);
+pub struct TickBroadcastTimer(Timer);
 
-impl Default for TickTimer {
+impl Default for TickBroadcastTimer {
     fn default() -> Self {
         Self(Timer::new(Duration::from_secs(10), TimerMode::Repeating))
     }
@@ -42,7 +42,7 @@ impl Plugin for TickPlugin {
         app.add_systems(FixedUpdate, (tick.in_set(GameLogic::Start),));
         if self.is_server {
             app.insert_resource(Tick::new(0));
-            app.insert_resource(TickTimer::default());
+            app.insert_resource(TickBroadcastTimer::default());
             app.add_systems(
                 FixedUpdate,
                 send_tick_update.in_set(GameLogic::Start).after(tick),
@@ -72,7 +72,7 @@ fn recv_tick_update(reader: Res<MessageReaderOnClient>, mut curr_tick: ResMut<Ti
 }
 
 fn send_tick_update(
-    mut timer: ResMut<TickTimer>,
+    mut timer: ResMut<TickBroadcastTimer>,
     mut server: ResMut<RenetServer>,
     time: Res<Time>,
     tick: Res<Tick>,
