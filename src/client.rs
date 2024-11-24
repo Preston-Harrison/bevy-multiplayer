@@ -1,6 +1,5 @@
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, PrimaryWindow};
-use bevy_rapier3d::prelude::*;
 use bevy_renet::renet::transport::{ClientAuthentication, NetcodeClientTransport};
 use bevy_renet::renet::{ConnectionConfig, DefaultChannel, RenetClient};
 use bevy_renet::transport::NetcodeClientPlugin;
@@ -12,12 +11,8 @@ use std::time::SystemTime;
 use crate::message::client::{MessageReaderOnClient, ReliableMessageFromClient};
 use crate::message::server::ReliableMessageFromServer;
 use crate::message::MessagesAvailable;
-use crate::shared::objects::grounded::Grounded;
-use crate::shared::objects::player::{
-    JumpCooldown, LocalPlayer, LocalPlayerTag, Player,
-};
-use crate::shared::objects::{self, LastSyncTracker};
-use crate::shared::physics::Kinematics;
+use crate::shared::objects;
+use crate::shared::objects::player::LocalPlayer;
 use crate::shared::tick::get_client_tick;
 use crate::shared::AppState;
 use crate::{message, shared};

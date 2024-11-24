@@ -178,4 +178,3 @@ fn cancel_jump_velocity_if_just_landed(
         }
     }
 }
-

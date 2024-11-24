@@ -101,10 +101,7 @@ pub struct PlayerCameraTarget;
 #[derive(Debug, Component)]
 pub struct PlayerCamera;
 
-pub fn spawn_player_camera(
-    mut commands: Commands,
-    players: Query<Entity, Added<LocalPlayerTag>>,
-) {
+pub fn spawn_player_camera(mut commands: Commands, players: Query<Entity, Added<LocalPlayerTag>>) {
     let Ok(entity) = players.get_single() else {
         return;
     };

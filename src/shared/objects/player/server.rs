@@ -261,4 +261,3 @@ pub fn load_player(
         }
     }
 }
-
