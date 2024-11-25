@@ -90,13 +90,6 @@ impl Plugin for Game {
         ));
         if !self.is_server {
             app.add_systems(FixedUpdate, despawn.in_set(GameLogic::Spawn));
-            app.add_systems(
-                FixedUpdate,
-                (
-                    log_start.in_set(GameLogic::Start),
-                    log_end.in_set(GameLogic::End),
-                ),
-            );
         }
         app.configure_sets(
             FixedUpdate,
@@ -126,14 +119,6 @@ pub fn despawn_recursive_and_broadcast(
     let bytes = bincode::serialize(&message).unwrap();
     server.broadcast_message(DefaultChannel::ReliableUnordered, bytes);
     commands.entity(entity).despawn_recursive();
-}
-
-fn log_start() {
-    info!("game logic start");
-}
-
-fn log_end() {
-    info!("game logic end");
 }
 
 pub enum SpawnMode<S, C> {

@@ -32,19 +32,6 @@ impl Plugin for PlayerPlugin {
     }
 }
 
-#[derive(Component)]
-pub struct JumpCooldown {
-    timer: Timer,
-}
-
-impl JumpCooldown {
-    fn new() -> Self {
-        Self {
-            timer: Timer::new(Duration::from_millis(200), TimerMode::Once),
-        }
-    }
-}
-
 #[derive(Resource)]
 pub struct LocalPlayer(pub NetworkObject);
 
@@ -73,14 +60,26 @@ pub struct Input {
 }
 
 #[derive(Component)]
-pub struct Player;
+pub struct Player {
+    pub jump_cooldown_timer: Timer,
+    pub kinematics: PlayerKinematics,
+}
+
+impl Player {
+    fn new() -> Self {
+        Self {
+            jump_cooldown_timer: Timer::new(Duration::from_millis(200), TimerMode::Once),
+            kinematics: PlayerKinematics::default(),
+        }
+    }
+}
 
 #[derive(Component)]
 pub struct LocalPlayerTag;
 
-fn tick_jump_cooldown(mut query: Query<&mut JumpCooldown>, time: Res<Time>) {
-    for mut cooldown in query.iter_mut() {
-        cooldown.timer.tick(time.delta());
+fn tick_jump_cooldown(mut query: Query<&mut Player>, time: Res<Time>) {
+    for mut player in query.iter_mut() {
+        player.jump_cooldown_timer.tick(time.delta());
     }
 }
 fn apply_input(
@@ -91,21 +90,17 @@ fn apply_input(
     char_controller: &KinematicCharacterController,
     time: &Time,
     curr_player: Entity,
-    kinematics: &mut PlayerKinematics,
+    player: &mut Player,
     grounded: &mut Grounded,
-    jump_cooldown: &mut JumpCooldown,
 ) {
     let movement = input.direction * 5.0 * time.delta_seconds();
-    if input.jump && grounded.is_grounded() && jump_cooldown.timer.finished() {
-        // info!("setting jump from apply_input");
-        kinematics.update(false, true);
-        jump_cooldown.timer.reset();
-        info!("resetting");
+    if input.jump && grounded.is_grounded() && player.jump_cooldown_timer.finished() {
+        player.kinematics.update(false, true);
+        player.jump_cooldown_timer.reset();
     } else {
-        // info!("clearing jump from apply_input");
-        kinematics.update(grounded.is_grounded(), false);
+        player.kinematics.update(grounded.is_grounded(), false);
     }
-    kinematics.tick(time.delta());
+    player.kinematics.tick(time.delta());
 
     let out = context.move_shape(
         movement,
@@ -127,7 +122,7 @@ pub enum AirTime {
     Airborne(Duration),
 }
 
-#[derive(Component, Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct PlayerKinematics {
     time_in_air: AirTime,
     is_jumping: bool,
@@ -202,15 +197,13 @@ pub fn spawn_player(
     net_obj: NetworkObject,
 ) {
     let mut entity = commands.spawn((
-        Player,
+        Player::new(),
         KinematicCharacterController::default(),
         RigidBody::KinematicPositionBased,
         Collider::capsule_y(0.5, 0.25),
         TransformBundle::from_transform(transform),
         Grounded::default(),
         net_obj.clone(),
-        JumpCooldown::new(),
-        PlayerKinematics::default(),
     ));
 
     match spawn_mode {

@@ -15,15 +15,13 @@ use crate::{
     shared::{
         objects::{
             grounded::Grounded,
-            player::{spawn_player, JumpCooldown, Player},
+            player::{spawn_player, Player},
             NetworkObject,
         },
         tick::Tick,
         GameLogic, SpawnMode,
     },
 };
-
-use super::PlayerKinematics;
 
 pub struct PlayerServerPlugin;
 
@@ -156,21 +154,12 @@ pub fn broadcast_player_spawns(
 /// Sends a `PlayerPositionSync` to everyone player except the player whose position
 /// it is. Sends an `OwnedPlayerSync` to the player who owns the position.
 pub fn broadcast_player_data(
-    query: Query<
-        (
-            &NetworkObject,
-            &Transform,
-            &LastInputTracker,
-            &PlayerKinematics,
-            &JumpCooldown,
-        ),
-        With<Player>,
-    >,
+    query: Query<(&NetworkObject, &Transform, &LastInputTracker, &Player), With<Player>>,
     client_netmap: Res<ClientNetworkObjectMap>,
     mut server: ResMut<RenetServer>,
     tick: Res<Tick>,
 ) {
-    for (obj, transform, input_tracker, kinematics, jump_cooldown) in query.iter() {
+    for (obj, transform, input_tracker, player) in query.iter() {
         let Some(client_id) = client_netmap.net_obj_to_client.get(obj) else {
             warn!("no client id for player obj in broadcast_player_data");
             continue;
@@ -188,9 +177,9 @@ pub fn broadcast_player_data(
             net_obj: obj.clone(),
             translation: transform.translation.clone(),
             tick: tick.clone(),
-            kinematics: kinematics.clone(),
+            kinematics: player.kinematics.clone(),
             last_input_order: input_tracker.order,
-            jump_cooldown_elapsed: jump_cooldown.timer.elapsed(),
+            jump_cooldown_elapsed: player.jump_cooldown_timer.elapsed(),
         });
         let bytes = bincode::serialize(&message).unwrap();
         server.send_message(*client_id, DefaultChannel::Unreliable, bytes);
@@ -206,9 +195,8 @@ pub struct InputQuery {
     last_input_tracker: &'static mut LastInputTracker,
     controller: &'static KinematicCharacterController,
     collider: &'static Collider,
-    kinematics: &'static mut PlayerKinematics,
     grounded: &'static mut Grounded,
-    jump_cooldown: &'static mut JumpCooldown,
+    player: &'static mut Player,
 }
 
 /// Grabs the most recent input for each player and applies it using `apply_input`.
@@ -240,9 +228,8 @@ pub fn apply_inputs(
                 item.controller,
                 &time,
                 item.entity,
-                &mut item.kinematics,
+                &mut item.player,
                 &mut item.grounded,
-                &mut item.jump_cooldown,
             );
             item.last_input_tracker.order = input.order;
         }

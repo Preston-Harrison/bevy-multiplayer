@@ -26,5 +26,4 @@ for the implementation.
 
 
 ## TODO:
-- Clean up the structure and logic of most of the modules, especially the player
 - Change message readers to use bevy's event system

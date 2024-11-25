@@ -30,8 +30,7 @@ use crate::{
 };
 
 use super::{
-    Input, JumpCooldown, LocalPlayer, LocalPlayerTag, Player, PlayerKinematics, Shot, ShotNothing,
-    ShotTarget,
+    Input, LocalPlayer, LocalPlayerTag, Player, PlayerKinematics, Shot, ShotNothing, ShotTarget,
 };
 
 pub struct PlayerClientPlugin;
@@ -267,7 +266,9 @@ pub fn read_input(
     let pressed_shoot_last_frame = pressed_shoot.0;
     pressed_shoot.0 = mouse_input.pressed(MouseButton::Left);
     let shoot = !pressed_shoot_last_frame && pressed_shoot.0;
-    let camera = camera.single();
+    let Ok(camera) = camera.get_single() else {
+        return;
+    };
     let shot = get_shot(&mut commands, &context, entity, shoot, camera, net_objs);
 
     if let Some(ref shot) = shot {
@@ -425,7 +426,7 @@ pub fn spawn_players(
         if let NetworkSpawn::Player(transform) = spawn.net_spawn {
             println!("spawning player");
             commands
-                .spawn(Player)
+                .spawn(Player::new())
                 .insert(LastSyncTracker::<Transform>::new(spawn.tick.clone()))
                 .insert((
                     KinematicCharacterController::default(),
@@ -448,8 +449,7 @@ pub struct LocalPlayerQueryForSync {
     collider: &'static Collider,
     controller: &'static KinematicCharacterController,
     grounded: &'static mut Grounded,
-    velocity: &'static mut PlayerKinematics,
-    jump_cooldown: &'static mut JumpCooldown,
+    player: &'static mut Player,
 }
 
 #[derive(QueryData)]
@@ -541,10 +541,10 @@ fn check_and_rollback(
     }
     record.last_sync_tracker.last_tick = owned_sync.tick.clone();
     record.transform.translation = owned_sync.translation;
-    *record.velocity = owned_sync.kinematics.clone();
+    record.player.kinematics = owned_sync.kinematics.clone();
     record
-        .jump_cooldown
-        .timer
+        .player
+        .jump_cooldown_timer
         .set_elapsed(owned_sync.jump_cooldown_elapsed);
     for input in inputs {
         super::apply_input(
@@ -555,9 +555,8 @@ fn check_and_rollback(
             record.controller,
             &time,
             record.entity,
-            &mut record.velocity,
+            &mut record.player,
             &mut record.grounded,
-            &mut record.jump_cooldown,
         );
         apply_kinematics(
             context,
@@ -565,14 +564,14 @@ fn check_and_rollback(
             record.controller,
             &mut record.transform,
             record.collider,
-            record.velocity.get_velocity(),
+            record.player.kinematics.get_velocity(),
             Some(&mut record.grounded),
             time.delta_seconds(),
         );
-        record.jump_cooldown.timer.tick(time.delta());
+        record.player.jump_cooldown_timer.tick(time.delta());
         history.push(PlayerSnapshot {
             translation: record.transform.translation,
-            kinematics: record.velocity.clone(),
+            kinematics: record.player.kinematics.clone(),
         });
         history.prune(100);
     }
@@ -586,8 +585,7 @@ pub struct LocalPlayerQuery {
     collider: &'static Collider,
     controller: &'static KinematicCharacterController,
     grounded: &'static mut Grounded,
-    kinematics: &'static mut PlayerKinematics,
-    jump_cooldown: &'static mut JumpCooldown,
+    player: &'static mut Player,
 }
 
 #[derive(ECSQueryFilter)]
@@ -624,13 +622,12 @@ pub fn predict_movement(
         local_player.controller,
         &time,
         local_player.entity,
-        &mut local_player.kinematics,
+        &mut local_player.player,
         &mut local_player.grounded,
-        &mut local_player.jump_cooldown,
     );
     snapshots.push(PlayerSnapshot {
         translation: local_player.transform.translation,
-        kinematics: local_player.kinematics.clone(),
+        kinematics: local_player.player.kinematics.clone(),
     });
     snapshots.prune(100);
 }

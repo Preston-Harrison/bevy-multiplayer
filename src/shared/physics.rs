@@ -4,7 +4,7 @@ use bevy_rapier3d::prelude::*;
 use super::{
     objects::{
         grounded::{set_grounded, Grounded},
-        player::PlayerKinematics,
+        player::Player,
         NetworkObject,
     },
     GameLogic,
@@ -31,7 +31,7 @@ pub struct KinematicsQuery {
     controller: &'static KinematicCharacterController,
     transform: &'static mut Transform,
     collider: &'static Collider,
-    velocity: &'static mut PlayerKinematics,
+    player: &'static mut Player,
     grounded: Option<&'static mut Grounded>,
 }
 
@@ -40,15 +40,15 @@ fn apply_kinematics_system(
     mut query: Query<KinematicsQuery>,
     time: Res<Time>,
 ) {
-    for mut kinematic in query.iter_mut() {
+    for mut item in query.iter_mut() {
         apply_kinematics(
             &mut context,
-            kinematic.entity,
-            kinematic.controller,
-            &mut kinematic.transform,
-            kinematic.collider,
-            kinematic.velocity.get_velocity(),
-            kinematic.grounded.as_deref_mut(),
+            item.entity,
+            item.controller,
+            &mut item.transform,
+            item.collider,
+            item.player.kinematics.get_velocity(),
+            item.grounded.as_deref_mut(),
             time.delta_seconds(),
         );
     }
