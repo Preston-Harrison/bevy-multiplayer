@@ -13,7 +13,9 @@ use bevy_renet::renet::{DefaultChannel, RenetClient};
 use crate::{
     message::{
         client::{MessageReaderOnClient, OrderedInput, UnreliableMessageFromClient},
-        server::{OwnedPlayerSync, PlayerInit, ReliableMessageFromServer, UnreliableMessageFromServer},
+        server::{
+            OwnedPlayerSync, PlayerInit, ReliableMessageFromServer, UnreliableMessageFromServer,
+        },
         spawn::NetworkSpawn,
     },
     shared::{
@@ -21,13 +23,14 @@ use crate::{
         objects::{
             gizmo::spawn_raycast_visual, grounded::Grounded, LastSyncTracker, NetworkObject,
         },
-        physics::{apply_kinematics, Kinematics},
+        physics::apply_kinematics,
         GameLogic,
     },
 };
 
 use super::{
-    Input, JumpCooldown, LocalPlayer, LocalPlayerTag, Player, Shot, ShotNothing, ShotTarget,
+    Input, JumpCooldown, LocalPlayer, LocalPlayerTag, Player, PlayerKinematics, Shot, ShotNothing,
+    ShotTarget,
 };
 
 pub struct PlayerClientPlugin;
@@ -159,8 +162,7 @@ type SnapshotHistory = TickBuffer<PlayerSnapshot>;
 
 pub struct PlayerSnapshot {
     translation: Vec3,
-    kinematics: Kinematics,
-    order: u64,
+    kinematics: PlayerKinematics,
 }
 impl PlayerSnapshot {
     fn is_different(&self, owned_sync: &OwnedPlayerSync) -> bool {
@@ -168,7 +170,6 @@ impl PlayerSnapshot {
         if owned_sync.translation.distance(self.translation) > 0.1 {
             return true;
         }
-        return false;
         return self.kinematics.is_different(&owned_sync.kinematics);
     }
 }
@@ -342,12 +343,13 @@ pub fn read_input(
         shot,
     };
     let order = ibuf.push_input(input.clone());
-    if input.is_non_zero() {
-        let message = UnreliableMessageFromClient::Input(OrderedInput { input, order });
-        let bytes = bincode::serialize(&message).unwrap();
-        client.send_message(DefaultChannel::Unreliable, bytes);
-        ibuf.prune(100);
-    }
+    ibuf.prune(100);
+
+    // TODO: figure out a way to send a zero valued input (or interpret lack of an
+    // input using input.order) in a more effecient way.
+    let message = UnreliableMessageFromClient::Input(OrderedInput { input, order });
+    let bytes = bincode::serialize(&message).unwrap();
+    client.send_message(DefaultChannel::Unreliable, bytes);
 }
 
 pub fn recv_player_shot(
@@ -444,7 +446,7 @@ pub struct LocalPlayerQueryForSync {
     collider: &'static Collider,
     controller: &'static KinematicCharacterController,
     grounded: &'static mut Grounded,
-    kinematics: &'static mut Kinematics,
+    velocity: &'static mut PlayerKinematics,
     jump_cooldown: &'static mut JumpCooldown,
 }
 
@@ -482,7 +484,6 @@ pub fn recv_position_sync(
                 let is_most_recent = record.last_sync_tracker.last_tick < owned_sync.tick;
                 if is_local && is_most_recent {
                     record.last_sync_tracker.last_tick = owned_sync.tick.clone();
-
                     let mut inputs = ibuf.inputs_after_order(owned_sync.last_input_order);
                     inputs.pop(); // Current frame input, will be processed later.
                     if inputs.len() == 0 {
@@ -490,10 +491,7 @@ pub fn recv_position_sync(
                     }
                     let snapshot = history.get_nth_from_latest(inputs.len());
                     let should_reconcile = match snapshot {
-                        Some(snapshot) => {
-                            // assert_eq!(snapshot.order, owned_sync.last_input_order, "snapshot is syncing from wrong input order");
-                            snapshot.is_different(owned_sync)
-                        },
+                        Some(snapshot) => snapshot.is_different(owned_sync),
                         None => false,
                     };
                     if !should_reconcile || !RECONCILE {
@@ -503,7 +501,7 @@ pub fn recv_position_sync(
                     info!("rolling back");
                     record.last_sync_tracker.last_tick = owned_sync.tick.clone();
                     record.transform.translation = owned_sync.translation;
-                    *record.kinematics = owned_sync.kinematics.clone();
+                    *record.velocity = owned_sync.kinematics.clone();
                     record
                         .jump_cooldown
                         .timer
@@ -518,7 +516,7 @@ pub fn recv_position_sync(
                             record.controller,
                             &time,
                             record.entity,
-                            &mut record.kinematics,
+                            &mut record.velocity,
                             &mut record.grounded,
                             &mut record.jump_cooldown,
                         );
@@ -528,16 +526,16 @@ pub fn recv_position_sync(
                             record.controller,
                             &mut record.transform,
                             record.collider,
-                            &mut record.kinematics,
+                            record.velocity.get_velocity(),
                             Some(&mut record.grounded),
-                            &time,
+                            time.delta_seconds(),
                         );
                         record.jump_cooldown.timer.tick(time.delta());
                         history.push(PlayerSnapshot {
                             translation: record.transform.translation,
-                            kinematics: record.kinematics.clone(),
-                            order: input.order,
+                            kinematics: record.velocity.clone(),
                         });
+                        history.prune(100);
                     }
                 }
             }
@@ -554,7 +552,7 @@ pub struct LocalPlayerQuery {
     collider: &'static Collider,
     controller: &'static KinematicCharacterController,
     grounded: &'static mut Grounded,
-    kinematics: &'static mut Kinematics,
+    kinematics: &'static mut PlayerKinematics,
     jump_cooldown: &'static mut JumpCooldown,
 }
 
@@ -597,7 +595,6 @@ pub fn predict_movement(
     snapshots.push(PlayerSnapshot {
         translation: local_player.transform.translation,
         kinematics: local_player.kinematics.clone(),
-        order: input.order,
     });
     snapshots.prune(100);
 }
@@ -605,7 +602,7 @@ pub fn predict_movement(
 pub fn spawn_player(commands: &mut Commands, player_info: &PlayerInit) {
     commands
         .spawn(Player)
-        .insert(Kinematics::new().with_gravity())
+        .insert(PlayerKinematics::default())
         .insert(LastSyncTracker::<Transform>::new(player_info.tick.clone()))
         .insert((
             KinematicCharacterController::default(),
@@ -617,5 +614,6 @@ pub fn spawn_player(commands: &mut Commands, player_info: &PlayerInit) {
         .insert(player_info.net_obj.clone())
         .insert(JumpCooldown::default())
         .insert(JumpCooldownHistory::default())
+        .insert(PlayerKinematics::default())
         .insert(LocalPlayerTag);
 }

@@ -1,11 +1,10 @@
-use bevy::{prelude::*, utils::HashMap};
+use bevy::{ecs::query::QueryData, prelude::*};
 use bevy_rapier3d::prelude::*;
-use serde::{Deserialize, Serialize};
 
 use super::{
     objects::{
         grounded::{set_grounded, Grounded},
-        player::LocalPlayerTag,
+        player::PlayerKinematics,
         NetworkObject,
     },
     GameLogic,
@@ -19,148 +18,38 @@ impl Plugin for PhysicsPlugin {
             .add_plugins(RapierDebugRenderPlugin::default());
         app.add_systems(
             FixedUpdate,
-            (
-                apply_kinematics_system.in_set(GameLogic::Kinematics),
-                cancel_gravity_if_grounded
-                    .in_set(GameLogic::Kinematics)
-                    .before(apply_kinematics_system),
-            ),
+            (apply_kinematics_system.in_set(GameLogic::Kinematics),),
         );
     }
 }
 
-/// TODO make this serialize into smaller bytes.
-#[derive(Component, Serialize, Deserialize, Debug, Clone)]
-pub struct Kinematics {
-    velocity: HashMap<String, Vec3>,
-    acceleration: HashMap<String, Vec3>,
-}
-
-impl Kinematics {
-    pub fn new() -> Self {
-        Self {
-            velocity: HashMap::new(),
-            acceleration: HashMap::new(),
-        }
-    }
-
-    pub fn with_gravity(mut self) -> Self {
-        self.set_acceleration(GRAVITY_KEY, Vec3::Y * GRAVITY);
-        self
-    }
-
-    pub fn set_velocity(&mut self, name: impl Into<String>, value: Vec3) {
-        self.velocity.insert(name.into(), value);
-    }
-
-    pub fn set_acceleration(&mut self, name: impl Into<String>, value: Vec3) {
-        self.acceleration.insert(name.into(), value);
-    }
-
-    pub fn accelerate(&mut self, seconds: f32) {
-        for (k, v) in self.acceleration.iter() {
-            let velocity = self.velocity.entry(k.clone()).or_default();
-            *velocity += *v * seconds;
-        }
-    }
-
-    pub fn get_displacement(&self, seconds: f32) -> Vec3 {
-        self.velocity.values().sum::<Vec3>() * seconds
-    }
-
-    pub fn is_different(&self, other: &Kinematics) -> bool {
-        // Check velocity differences
-        if self.velocity.len() != other.velocity.len() {
-            return true;
-        }
-
-        for (key, self_velocity) in &self.velocity {
-            match other.velocity.get(key) {
-                Some(other_velocity) => {
-                    if (*self_velocity - *other_velocity).length() > 0.1 {
-                        return true;
-                    }
-                }
-                None => return true, // Key not found in other's velocities
-            }
-        }
-
-        // Check for extra keys in other's velocities
-        for key in other.velocity.keys() {
-            if !self.velocity.contains_key(key) {
-                return true;
-            }
-        }
-
-        // Check acceleration differences
-        if self.acceleration.len() != other.acceleration.len() {
-            return true;
-        }
-
-        for (key, self_acceleration) in &self.acceleration {
-            match other.acceleration.get(key) {
-                Some(other_acceleration) => {
-                    if (*self_acceleration - *other_acceleration).length() > 0.1 {
-                        return true;
-                    }
-                }
-                None => return true, // Key not found in other's accelerations
-            }
-        }
-
-        // Check for extra keys in other's accelerations
-        for key in other.acceleration.keys() {
-            if !self.acceleration.contains_key(key) {
-                return true;
-            }
-        }
-
-        // If all checks pass, the snapshots are considered the same
-        false
-    }
-}
-
-const GRAVITY: f32 = -10.0;
-const GRAVITY_KEY: &str = "gravity";
-
-fn cancel_gravity_if_grounded(mut kinematics: Query<(&mut Kinematics, &Grounded)>) {
-    for (mut kinematics, grounded) in kinematics.iter_mut() {
-        if grounded.grounded_this_tick() {
-            kinematics.set_velocity(GRAVITY_KEY, Vec3::ZERO);
-        }
-    }
+#[derive(QueryData)]
+#[query_data(mutable)]
+pub struct KinematicsQuery {
+    entity: Entity,
+    net_obj: &'static NetworkObject,
+    controller: &'static KinematicCharacterController,
+    transform: &'static mut Transform,
+    collider: &'static Collider,
+    velocity: &'static mut PlayerKinematics,
+    grounded: Option<&'static mut Grounded>,
 }
 
 fn apply_kinematics_system(
     mut context: ResMut<RapierContext>,
-    player: Query<&NetworkObject, With<LocalPlayerTag>>,
-    mut query: Query<(
-        Entity,
-        &NetworkObject,
-        &KinematicCharacterController,
-        &mut Transform,
-        &Collider,
-        &mut Kinematics,
-        Option<&mut Grounded>,
-    )>,
+    mut query: Query<KinematicsQuery>,
     time: Res<Time>,
 ) {
-    let local_player_tag = player.get_single().ok();
-    for (entity, net_obj, controller, mut transform, collider, mut kinematics, mut grounded) in
-        query.iter_mut()
-    {
-        if local_player_tag.is_some_and(|tag| tag != net_obj) {
-            continue;
-        }
+    for mut kinematic in query.iter_mut() {
         apply_kinematics(
             &mut context,
-            entity,
-            controller,
-            &mut transform,
-            collider,
-            &mut kinematics,
-            grounded.as_deref_mut(),
-            &time,
+            kinematic.entity,
+            kinematic.controller,
+            &mut kinematic.transform,
+            kinematic.collider,
+            kinematic.velocity.get_velocity(),
+            kinematic.grounded.as_deref_mut(),
+            time.delta_seconds(),
         );
     }
 }
@@ -171,15 +60,13 @@ pub fn apply_kinematics(
     controller: &KinematicCharacterController,
     transform: &mut Transform,
     collider: &Collider,
-    kinematics: &mut Kinematics,
+    movement: Vec3,
     grounded: Option<&mut Grounded>,
-    time: &Time,
+    delta_seconds: f32,
 ) {
     info!("applying kinematics");
-    kinematics.accelerate(time.delta_seconds());
-    let movement = kinematics.get_displacement(time.delta_seconds());
     let output = context.move_shape(
-        movement,
+        movement * delta_seconds,
         collider,
         transform.translation,
         transform.rotation,

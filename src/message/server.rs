@@ -5,8 +5,7 @@ use bevy_renet::renet::{ClientId, DefaultChannel, RenetServer};
 use serde::{Deserialize, Serialize};
 
 use crate::shared::{
-    objects::{player::Shot, NetworkObject},
-    physics::Kinematics,
+    objects::{player::{PlayerKinematics, Shot}, NetworkObject},
     tick::Tick,
     GameLogic,
 };
@@ -58,7 +57,7 @@ pub struct OwnedPlayerSync {
     pub translation: Vec3,
     pub tick: Tick,
     pub last_input_order: u64,
-    pub kinematics: Kinematics,
+    pub kinematics: PlayerKinematics,
     pub jump_cooldown_elapsed: Duration,
 }
 

@@ -18,10 +18,11 @@ use crate::{
             player::{JumpCooldown, Player},
             NetworkObject,
         },
-        physics::Kinematics,
         tick::Tick,
     },
 };
+
+use super::PlayerKinematics;
 
 #[derive(Component, Default)]
 pub struct LastInputTracker {
@@ -96,7 +97,7 @@ pub fn init_players(
             RigidBody::KinematicPositionBased,
             Collider::capsule_y(0.5, 0.25),
             TransformBundle::from_transform(transform),
-            Kinematics::new().with_gravity(),
+            PlayerKinematics::default(),
             Grounded::default(),
             JumpCooldown::new(),
         ));
@@ -137,7 +138,7 @@ pub fn broadcast_player_data(
             &NetworkObject,
             &Transform,
             &LastInputTracker,
-            &Kinematics,
+            &PlayerKinematics,
             &JumpCooldown,
         ),
         With<Player>,
@@ -182,7 +183,7 @@ pub fn apply_inputs(
             &mut LastInputTracker,
             &KinematicCharacterController,
             &Collider,
-            &mut Kinematics,
+            &mut PlayerKinematics,
             &mut Grounded,
             &mut JumpCooldown,
         ),

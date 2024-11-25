@@ -5,7 +5,7 @@ use bevy_rapier3d::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::shared::{
-    physics::{char_ctrl_to_move_opts, Kinematics},
+    physics::char_ctrl_to_move_opts,
     GameLogic,
 };
 
@@ -28,7 +28,6 @@ impl Plugin for PlayerPlugin {
         app.add_systems(
             FixedUpdate,
             (
-                cancel_jump_velocity_if_just_landed.in_set(GameLogic::End),
                 tick_jump_cooldown.in_set(GameLogic::Start),
             ),
         );
@@ -92,12 +91,6 @@ pub struct Input {
     shot: Option<Shot>,
 }
 
-impl Input {
-    fn is_non_zero(&self) -> bool {
-        self.direction.length_squared() > (0.1 * 0.1) || self.shot.is_some() || self.jump
-    }
-}
-
 #[derive(Component)]
 pub struct Player;
 
@@ -124,18 +117,18 @@ fn apply_input(
     char_controller: &KinematicCharacterController,
     time: &Time,
     curr_player: Entity,
-    kinematics: &mut Kinematics,
+    kinematics: &mut PlayerKinematics,
     grounded: &mut Grounded,
     jump_cooldown: &mut JumpCooldown,
 ) {
     let movement = input.direction * 5.0 * time.delta_seconds();
     if input.jump && grounded.grounded_this_tick() && jump_cooldown.timer.finished() {
         info!("setting jump from apply_input");
-        kinematics.set_velocity(JUMP_KEY, JUMP_VELOCITY);
+        kinematics.tick(false, true, time.delta());
         jump_cooldown.timer.reset();
-    } else if !grounded.was_grounded_last_tick() && grounded.grounded_this_tick() {
-        kinematics.set_velocity(JUMP_KEY, Vec3::ZERO);
+    } else {
         info!("clearing jump from apply_input");
+        kinematics.tick(grounded.grounded_this_tick(), false, time.delta());
     }
 
     let out = context.move_shape(
@@ -152,13 +145,73 @@ fn apply_input(
     grounded.set_is_grounded(out.grounded);
 }
 
-fn cancel_jump_velocity_if_just_landed(
-    mut query: Query<(&Grounded, &mut Kinematics, &JumpCooldown), With<Player>>,
-) {
-    for (grounded, mut kinematics, jump_cooldown) in query.iter_mut() {
-        if grounded.grounded_this_tick() && jump_cooldown.timer.finished() {
-            info!("clearing jump because cancelled");
-            kinematics.set_velocity(JUMP_KEY, Vec3::ZERO);
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum AirTime {
+    Grounded,
+    Airborne(Duration),
+}
+
+#[derive(Component, Serialize, Deserialize, Debug, Clone)]
+pub struct PlayerKinematics {
+    time_in_air: AirTime,
+    is_jumping: bool,
+}
+
+impl Default for PlayerKinematics {
+    fn default() -> Self {
+        Self {
+            time_in_air: AirTime::Grounded,
+            is_jumping: false,
         }
+    }
+}
+
+impl PlayerKinematics {
+    pub fn tick(&mut self, is_grounded: bool, jumped: bool, delta: Duration) {
+        self.is_jumping |= jumped;
+        if is_grounded {
+            self.time_in_air = AirTime::Grounded;
+            self.is_jumping = false;
+        } else {
+            self.time_in_air = match self.time_in_air {
+                AirTime::Grounded => AirTime::Airborne(delta),
+                AirTime::Airborne(time) => AirTime::Airborne(time + delta),
+            };
+        }
+    }
+
+    pub fn get_velocity(&self) -> Vec3 {
+        let gravity = match self.time_in_air {
+            AirTime::Airborne(duration) => Vec3::Y * -10.0 * duration.as_secs_f32(),
+            AirTime::Grounded => Vec3::ZERO,
+        };
+        let jump = if self.is_jumping {
+            Vec3::Y * 20.0
+        } else {
+            Vec3::ZERO
+        };
+        gravity + jump
+    }
+
+    pub fn is_different(&self, other: &Self) -> bool {
+        // Compare time_in_air
+        match (&self.time_in_air, &other.time_in_air) {
+            (AirTime::Grounded, AirTime::Grounded) => {}
+            (AirTime::Airborne(d1), AirTime::Airborne(d2)) => {
+                if (*d1 > *d2 && *d1 - *d2 > Duration::from_millis(100))
+                    || (*d2 > *d1 && *d2 - *d1 > Duration::from_millis(100))
+                {
+                    return true;
+                }
+            }
+            _ => return true, // Different enum variants
+        }
+
+        // Compare is_jumping
+        if self.is_jumping != other.is_jumping {
+            return true;
+        }
+
+        false // No differences found
     }
 }
