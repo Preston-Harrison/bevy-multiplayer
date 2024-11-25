@@ -19,18 +19,12 @@ impl Plugin for GroundedPlugin {
 #[derive(Component, Default)]
 pub struct Grounded {
     is_grounded: bool,
-    grounded_last_tick: bool,
     grounded_this_tick: bool,
 }
 
 impl Grounded {
     pub fn tick(&mut self) {
-        self.grounded_last_tick = self.grounded_this_tick;
         self.grounded_this_tick = self.is_grounded;
-    }
-
-    pub fn was_grounded_last_tick(&self) -> bool {
-        self.grounded_last_tick
     }
 
     pub fn is_grounded(&self) -> bool {
@@ -40,10 +34,6 @@ impl Grounded {
     pub fn set_is_grounded(&mut self, is_grounded: bool) {
         self.is_grounded = is_grounded;
         self.grounded_this_tick |= self.is_grounded;
-    }
-
-    pub fn grounded_this_tick(&self) -> bool {
-        self.grounded_this_tick
     }
 }
 

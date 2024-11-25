@@ -135,3 +135,8 @@ fn log_start() {
 fn log_end() {
     info!("game logic end");
 }
+
+pub enum SpawnMode<S, C> {
+    Server(S),
+    Client(C),
+}

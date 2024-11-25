@@ -15,10 +15,11 @@ use crate::{
     shared::{
         objects::{
             grounded::Grounded,
-            player::{JumpCooldown, Player},
+            player::{spawn_player, JumpCooldown, Player},
             NetworkObject,
         },
         tick::Tick,
+        SpawnMode,
     },
 };
 
@@ -89,18 +90,12 @@ pub fn init_players(
 ) {
     for init in player_init.read() {
         let transform = Transform::from_xyz(0.0, 1.0, 0.0);
-        commands.spawn((
-            Player,
+        spawn_player(
+            SpawnMode::Server(()),
+            &mut commands,
+            transform,
             init.net_obj.clone(),
-            LastInputTracker::default(),
-            KinematicCharacterController::default(),
-            RigidBody::KinematicPositionBased,
-            Collider::capsule_y(0.5, 0.25),
-            TransformBundle::from_transform(transform),
-            PlayerKinematics::default(),
-            Grounded::default(),
-            JumpCooldown::new(),
-        ));
+        );
 
         info!("sending player init");
         let message = ReliableMessageFromServer::InitPlayer(PlayerInit {

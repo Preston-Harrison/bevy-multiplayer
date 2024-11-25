@@ -11,10 +11,10 @@ use std::time::SystemTime;
 use crate::message::client::{MessageReaderOnClient, ReliableMessageFromClient};
 use crate::message::server::ReliableMessageFromServer;
 use crate::message::MessagesAvailable;
-use crate::shared::objects;
 use crate::shared::objects::player::LocalPlayer;
 use crate::shared::tick::get_client_tick;
 use crate::shared::AppState;
+use crate::shared::SpawnMode;
 use crate::{message, shared};
 
 #[derive(States, Debug, Clone, PartialEq, Eq, Hash)]
@@ -206,7 +206,12 @@ fn set_local_player(
                 println!("set local player");
                 server_info.set_player_obj = true;
                 commands.insert_resource(LocalPlayer(player_info.net_obj.clone()));
-                objects::player::client::spawn_player(&mut commands, player_info);
+                shared::objects::player::spawn_player(
+                    SpawnMode::Client(player_info.tick.clone()),
+                    &mut commands,
+                    player_info.transform,
+                    player_info.net_obj.clone(),
+                );
             }
             ReliableMessageFromServer::TickSync(sync) => {
                 let tick = get_client_tick(sync.tick, sync.unix_millis);

@@ -13,9 +13,7 @@ use bevy_renet::renet::{DefaultChannel, RenetClient};
 use crate::{
     message::{
         client::{MessageReaderOnClient, OrderedInput, UnreliableMessageFromClient},
-        server::{
-            OwnedPlayerSync, PlayerInit, ReliableMessageFromServer, UnreliableMessageFromServer,
-        },
+        server::{OwnedPlayerSync, ReliableMessageFromServer, UnreliableMessageFromServer},
         spawn::NetworkSpawn,
     },
     shared::{
@@ -580,22 +578,4 @@ pub fn predict_movement(
         kinematics: local_player.kinematics.clone(),
     });
     snapshots.prune(100);
-}
-
-pub fn spawn_player(commands: &mut Commands, player_info: &PlayerInit) {
-    commands
-        .spawn(Player)
-        .insert(PlayerKinematics::default())
-        .insert(LastSyncTracker::<Transform>::new(player_info.tick.clone()))
-        .insert((
-            KinematicCharacterController::default(),
-            RigidBody::KinematicPositionBased,
-            Collider::capsule_y(0.5, 0.25),
-            TransformBundle::from_transform(player_info.transform),
-        ))
-        .insert(Grounded::default())
-        .insert(player_info.net_obj.clone())
-        .insert(JumpCooldown::new())
-        .insert(PlayerKinematics::default())
-        .insert(LocalPlayerTag);
 }

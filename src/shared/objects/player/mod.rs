@@ -4,11 +4,11 @@ use bevy::prelude::*;
 use bevy_rapier3d::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::shared::{physics::char_ctrl_to_move_opts, GameLogic};
+use crate::shared::{physics::char_ctrl_to_move_opts, tick::Tick, GameLogic, SpawnMode};
 
-use self::client::PlayerClientPlugin;
+use self::{client::PlayerClientPlugin, server::LastInputTracker};
 
-use super::{grounded::Grounded, NetworkObject};
+use super::{grounded::Grounded, LastSyncTracker, NetworkObject};
 
 pub mod client;
 pub mod server;
@@ -200,5 +200,35 @@ impl PlayerKinematics {
         }
 
         false // No differences found
+    }
+}
+
+pub fn spawn_player(
+    spawn_mode: SpawnMode<(), Tick>,
+    commands: &mut Commands,
+    transform: Transform,
+    net_obj: NetworkObject,
+) {
+    let mut entity = commands.spawn((
+        Player,
+        KinematicCharacterController::default(),
+        RigidBody::KinematicPositionBased,
+        Collider::capsule_y(0.5, 0.25),
+        TransformBundle::from_transform(transform),
+        Grounded::default(),
+        net_obj.clone(),
+        JumpCooldown::new(),
+        PlayerKinematics::default(),
+    ));
+
+    match spawn_mode {
+        SpawnMode::Server(_) => {
+            entity.insert(LastInputTracker::default());
+        }
+        SpawnMode::Client(tick) => {
+            entity
+                .insert(LocalPlayerTag)
+                .insert(LastSyncTracker::<Transform>::new(tick));
+        }
     }
 }
