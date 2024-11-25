@@ -13,7 +13,10 @@ use bevy_renet::renet::{DefaultChannel, RenetClient};
 use crate::{
     message::{
         client::{MessageReaderOnClient, OrderedInput, UnreliableMessageFromClient},
-        server::{OwnedPlayerSync, ReliableMessageFromServer, UnreliableMessageFromServer},
+        server::{
+            OwnedPlayerSync, PlayerPositionSync, ReliableMessageFromServer,
+            UnreliableMessageFromServer,
+        },
         spawn::NetworkSpawn,
     },
     shared::{
@@ -40,7 +43,7 @@ impl Plugin for PlayerClientPlugin {
         app.add_systems(
             FixedUpdate,
             (
-                spawn_player_camera, // Runs when LocalPlayerTag is added
+                spawn_player_camera,
                 read_input.in_set(GameLogic::ReadInput),
                 spawn_players.in_set(GameLogic::Spawn),
                 recv_position_sync.in_set(GameLogic::Sync),
@@ -62,6 +65,8 @@ impl Plugin for PlayerClientPlugin {
 const RECONCILE: bool = true;
 const PREDICT: bool = true;
 
+/// Stores a queue of `T`, where the item at the back of the queue corresponds
+/// to the most recent tick.
 #[derive(Resource)]
 pub struct TickBuffer<T> {
     items: VecDeque<T>,
@@ -99,6 +104,9 @@ impl<T> TickBuffer<T> {
     }
 }
 
+/// Stores a list of inputs (one for each tick), where the latest input is at
+/// the back of `self.buffer`. The count is stored to order the inputs, and is
+/// incremented by one when an input is pushed.
 #[derive(Resource, Default)]
 pub struct InputBuffer {
     buffer: TickBuffer<OrderedInput>,
@@ -133,6 +141,8 @@ impl InputBuffer {
     }
 }
 
+/// Stores a queue of state that is needed to check if a rollback is necessary
+/// when receiving a sync from the server.
 type SnapshotHistory = TickBuffer<PlayerSnapshot>;
 
 pub struct PlayerSnapshot {
@@ -140,6 +150,8 @@ pub struct PlayerSnapshot {
     kinematics: PlayerKinematics,
 }
 impl PlayerSnapshot {
+    /// Returns if a snapshot is different to an `OwnedPlayerSync` within a
+    /// small threshold.
     fn is_different(&self, owned_sync: &OwnedPlayerSync) -> bool {
         if owned_sync.translation.distance(self.translation) > 0.1 {
             return true;
@@ -154,6 +166,7 @@ pub struct PlayerCameraTarget;
 #[derive(Debug, Component)]
 pub struct PlayerCamera;
 
+/// Spawns a player camera when a local player is created.
 pub fn spawn_player_camera(mut commands: Commands, players: Query<Entity, Added<LocalPlayerTag>>) {
     let Ok(entity) = players.get_single() else {
         return;
@@ -179,6 +192,7 @@ pub fn spawn_player_camera(mut commands: Commands, players: Query<Entity, Added<
     ));
 }
 
+/// Rotates the player based on mouse movement.
 pub fn rotate_player(
     mut mouse_motion: EventReader<MouseMotion>,
     mut player: Query<&mut Transform, (With<LocalPlayerTag>, Without<PlayerCameraTarget>)>,
@@ -204,6 +218,8 @@ pub fn rotate_player(
     }
 }
 
+/// Interpolates the actual camera to the target camera position. This is useful
+/// for avoiding camera jitter.
 pub fn rubber_band_player_camera(
     target: Query<&GlobalTransform, (With<PlayerCameraTarget>, Without<PlayerCamera>)>,
     mut camera: Query<&mut Transform, (With<PlayerCamera>, Without<PlayerCameraTarget>)>,
@@ -224,9 +240,12 @@ pub fn rubber_band_player_camera(
     }
 }
 
+/// Stores if shoot was pressed last frame for semi-auto fire.
 #[derive(Default)]
 pub struct PressedShootLastFrame(bool);
 
+/// Reads input from the keyboard and mouse and stores it in a buffer. Doesn't
+/// include rotation, like looking around.
 pub fn read_input(
     mut pressed_shoot: Local<PressedShootLastFrame>,
     mouse_input: Res<ButtonInput<MouseButton>>,
@@ -244,75 +263,21 @@ pub fn read_input(
         error!("no player found when reading input");
         return;
     };
-    let mut local_direction = Vec3::ZERO;
-
-    if keyboard_input.pressed(KeyCode::KeyW) {
-        local_direction -= Vec3::Z;
-    }
-    if keyboard_input.pressed(KeyCode::KeyS) {
-        local_direction += Vec3::Z;
-    }
-    if keyboard_input.pressed(KeyCode::KeyA) {
-        local_direction -= Vec3::X;
-    }
-    if keyboard_input.pressed(KeyCode::KeyD) {
-        local_direction += Vec3::X;
-    }
+    let local_direction = get_direction(&keyboard_input).normalize_or_zero();
     let pressed_shoot_last_frame = pressed_shoot.0;
     pressed_shoot.0 = mouse_input.pressed(MouseButton::Left);
     let shoot = !pressed_shoot_last_frame && pressed_shoot.0;
-
-    let shot = if shoot {
-        let camera = camera.single();
-        let ray_pos = camera.translation;
-        let ray_dir = *camera.forward();
-        let max_toi = 10.0;
-        if let Some((entity, toi)) = context.cast_ray(
-            ray_pos,
-            ray_dir,
-            max_toi,
-            false,
-            QueryFilter::default().exclude_collider(entity),
-        ) {
-            spawn_raycast_visual(&mut commands, ray_pos, ray_dir, toi, GREEN_500, 2000);
-
-            // TODO: handle if they shot something that wasn't a network object, e.g. the floor.
-            let impact_point = ray_pos + (ray_dir * toi);
-            net_objs.get(entity).ok().map(|(obj, transform)| {
-                let relative_position = impact_point - transform.translation;
-                Shot::ShotTarget(ShotTarget {
-                    target: obj.clone(),
-                    relative_position,
-                })
-            })
-        } else {
-            spawn_raycast_visual(&mut commands, ray_pos, ray_dir, max_toi, YELLOW_500, 2000);
-            Some(Shot::ShotNothing(ShotNothing {
-                vector: ray_dir * max_toi,
-            }))
-        }
-    } else {
-        None
-    };
+    let camera = camera.single();
+    let shot = get_shot(&mut commands, &context, entity, shoot, camera, net_objs);
 
     if let Some(ref shot) = shot {
         console.send(ConsoleMessage::new(format!("you shot {:?}", shot)));
     }
 
-    if local_direction.length_squared() > 0.0 {
-        local_direction = local_direction.normalize();
-    }
-
     let world_direction = player_transform.rotation * local_direction;
     let world_direction_xz = Vec3::new(world_direction.x, 0.0, world_direction.z);
-    let final_direction = if world_direction_xz.length_squared() > 0.0 {
-        world_direction_xz.normalize()
-    } else {
-        Vec3::ZERO
-    };
-
     let input = Input {
-        direction: final_direction,
+        direction: world_direction_xz.normalize_or_zero(),
         jump: keyboard_input.pressed(KeyCode::Space),
         shot,
     };
@@ -326,6 +291,68 @@ pub fn read_input(
     client.send_message(DefaultChannel::Unreliable, bytes);
 }
 
+/// Gets a non-normalized vector from WASD input.
+fn get_direction(keyboard_input: &ButtonInput<KeyCode>) -> Vec3 {
+    let mut local_direction = Vec3::ZERO;
+    if keyboard_input.pressed(KeyCode::KeyW) {
+        local_direction -= Vec3::Z;
+    }
+    if keyboard_input.pressed(KeyCode::KeyS) {
+        local_direction += Vec3::Z;
+    }
+    if keyboard_input.pressed(KeyCode::KeyA) {
+        local_direction -= Vec3::X;
+    }
+    if keyboard_input.pressed(KeyCode::KeyD) {
+        local_direction += Vec3::X;
+    }
+    local_direction
+}
+
+/// Spawns a raycast towards a target and returns a `Shot` if there's a hit.
+fn get_shot(
+    commands: &mut Commands,
+    context: &RapierContext,
+    shooter: Entity,
+    shoot: bool,
+    camera: &Transform,
+    net_objs: Query<(&NetworkObject, &Transform)>,
+) -> Option<Shot> {
+    if !shoot {
+        return None;
+    }
+    let ray_pos = camera.translation;
+    let ray_dir = *camera.forward();
+    let max_toi = 10.0;
+    let raycast = context.cast_ray(
+        ray_pos,
+        ray_dir,
+        max_toi,
+        false,
+        QueryFilter::default().exclude_collider(shooter),
+    );
+    match raycast {
+        Some((entity, toi)) => {
+            spawn_raycast_visual(commands, ray_pos, ray_dir, toi, GREEN_500, 2000);
+            let impact_point = ray_pos + (ray_dir * toi);
+            net_objs.get(entity).ok().map(|(obj, transform)| {
+                let relative_position = impact_point - transform.translation;
+                Shot::ShotTarget(ShotTarget {
+                    target: obj.clone(),
+                    relative_position,
+                })
+            })
+        }
+        None => {
+            spawn_raycast_visual(commands, ray_pos, ray_dir, max_toi, YELLOW_500, 2000);
+            Some(Shot::ShotNothing(ShotNothing {
+                vector: ray_dir * max_toi,
+            }))
+        }
+    }
+}
+
+/// Receives `Shot` messages from the server and spawns a visual.
 pub fn recv_player_shot(
     reader: Res<MessageReaderOnClient>,
     mut commands: Commands,
@@ -382,6 +409,7 @@ pub fn recv_player_shot(
     }
 }
 
+/// Handles `Spawn` events from the server and spawns players.
 pub fn spawn_players(
     mut commands: Commands,
     reader: Res<MessageReaderOnClient>,
@@ -424,16 +452,20 @@ pub struct LocalPlayerQueryForSync {
     jump_cooldown: &'static mut JumpCooldown,
 }
 
+#[derive(QueryData)]
+#[query_data(mutable)]
+pub struct NonLocalPlayers {
+    transform: &'static mut Transform,
+    net_obj: &'static NetworkObject,
+    last_sync_tracker: &'static mut LastSyncTracker<Transform>,
+}
+
+/// Receives player synchronization events. For `PlayerPositionSync`, this just
+/// sets the new position with `sync_nonlocal`. For `OwnedPlayerSync`, this performs
+/// rollback with `check_and_rollback`.
 pub fn recv_position_sync(
     reader: Res<MessageReaderOnClient>,
-    mut nonlocal_players: Query<
-        (
-            &mut Transform,
-            &NetworkObject,
-            &mut LastSyncTracker<Transform>,
-        ),
-        (With<Player>, Without<LocalPlayerTag>),
-    >,
+    mut nonlocal_players: Query<NonLocalPlayers, (With<Player>, Without<LocalPlayerTag>)>,
     mut local_player: Query<LocalPlayerQueryForSync, LocalPlayerFilter>,
     ibuf: Res<InputBuffer>,
     mut history: ResMut<SnapshotHistory>,
@@ -443,12 +475,7 @@ pub fn recv_position_sync(
     for msg in reader.unreliable_messages() {
         match msg {
             UnreliableMessageFromServer::PlayerPositionSync(pos_sync) => {
-                for (mut transform, obj, mut last_sync_tracker) in nonlocal_players.iter_mut() {
-                    if *obj == pos_sync.net_obj && last_sync_tracker.last_tick < pos_sync.tick {
-                        last_sync_tracker.last_tick = pos_sync.tick.clone();
-                        transform.translation = pos_sync.translation;
-                    }
-                }
+                sync_nonlocal(&mut nonlocal_players, pos_sync);
             }
             UnreliableMessageFromServer::OwnedPlayerSync(owned_sync) => {
                 let Ok(mut record) = local_player.get_single_mut() else {
@@ -457,71 +484,97 @@ pub fn recv_position_sync(
                 let is_local = *record.net_obj == owned_sync.net_obj;
                 let is_most_recent = record.last_sync_tracker.last_tick < owned_sync.tick;
                 if is_local && is_most_recent {
-                    record.last_sync_tracker.last_tick = owned_sync.tick.clone();
-                    let mut inputs = ibuf.inputs_after_order(owned_sync.last_input_order);
-                    inputs.pop(); // Current frame input, will be processed later.
-                    if inputs.len() == 0 {
-                        continue;
-                    }
-                    let snapshot = history.get_nth_from_latest(inputs.len());
-                    let should_reconcile = match snapshot {
-                        Some(snapshot) => snapshot.is_different(owned_sync),
-                        None => false,
-                    };
-                    if !should_reconcile || !RECONCILE {
-                        continue;
-                    }
-                    if snapshot
-                        .unwrap()
-                        .kinematics
-                        .is_different(&owned_sync.kinematics)
-                    {
-                        warn!("rolling back, kinematics differ");
-                    } else {
-                        warn!("rolling back, translations differ");
-                    }
-                    record.last_sync_tracker.last_tick = owned_sync.tick.clone();
-                    record.transform.translation = owned_sync.translation;
-                    *record.velocity = owned_sync.kinematics.clone();
-                    record
-                        .jump_cooldown
-                        .timer
-                        .set_elapsed(owned_sync.jump_cooldown_elapsed);
-                    // BOOKMARK: rollback
-                    for input in inputs {
-                        super::apply_input(
-                            &mut context,
-                            &input.input,
-                            &mut record.transform,
-                            record.collider,
-                            record.controller,
-                            &time,
-                            record.entity,
-                            &mut record.velocity,
-                            &mut record.grounded,
-                            &mut record.jump_cooldown,
-                        );
-                        apply_kinematics(
-                            &mut context,
-                            record.entity,
-                            record.controller,
-                            &mut record.transform,
-                            record.collider,
-                            record.velocity.get_velocity(),
-                            Some(&mut record.grounded),
-                            time.delta_seconds(),
-                        );
-                        record.jump_cooldown.timer.tick(time.delta());
-                        history.push(PlayerSnapshot {
-                            translation: record.transform.translation,
-                            kinematics: record.velocity.clone(),
-                        });
-                        history.prune(100);
-                    }
+                    check_and_rollback(
+                        &mut context,
+                        &mut record,
+                        owned_sync,
+                        &ibuf,
+                        &mut history,
+                        &time,
+                    );
                 }
             }
             _ => {}
         }
+    }
+}
+
+/// Applies synchronization for non-local players.
+fn sync_nonlocal(
+    nonlocal_players: &mut Query<NonLocalPlayers, (With<Player>, Without<LocalPlayerTag>)>,
+    pos_sync: &PlayerPositionSync,
+) {
+    for mut player in nonlocal_players.iter_mut() {
+        let is_same_player = *player.net_obj == pos_sync.net_obj;
+        let is_most_recent = player.last_sync_tracker.last_tick < pos_sync.tick;
+        if is_same_player && is_most_recent {
+            player.last_sync_tracker.last_tick = pos_sync.tick.clone();
+            player.transform.translation = pos_sync.translation;
+        }
+    }
+}
+
+/// Applies an owned player sync to the local player. Performs rollback and
+/// reconciliation if there's a difference between the sync and the local player
+/// snapshot.
+fn check_and_rollback(
+    context: &mut RapierContext,
+    record: &mut LocalPlayerQueryForSyncItem,
+    owned_sync: &OwnedPlayerSync,
+    ibuf: &InputBuffer,
+    history: &mut SnapshotHistory,
+    time: &Time,
+) {
+    record.last_sync_tracker.last_tick = owned_sync.tick.clone();
+    let mut inputs = ibuf.inputs_after_order(owned_sync.last_input_order);
+    inputs.pop(); // Current frame input, will be processed later.
+    if inputs.len() == 0 {
+        return;
+    }
+    let snapshot = history.get_nth_from_latest(inputs.len());
+    let should_reconcile = match snapshot {
+        Some(snapshot) => snapshot.is_different(owned_sync),
+        None => false,
+    };
+    if !should_reconcile || !RECONCILE {
+        return;
+    }
+    record.last_sync_tracker.last_tick = owned_sync.tick.clone();
+    record.transform.translation = owned_sync.translation;
+    *record.velocity = owned_sync.kinematics.clone();
+    record
+        .jump_cooldown
+        .timer
+        .set_elapsed(owned_sync.jump_cooldown_elapsed);
+    for input in inputs {
+        super::apply_input(
+            context,
+            &input.input,
+            &mut record.transform,
+            record.collider,
+            record.controller,
+            &time,
+            record.entity,
+            &mut record.velocity,
+            &mut record.grounded,
+            &mut record.jump_cooldown,
+        );
+        apply_kinematics(
+            context,
+            record.entity,
+            record.controller,
+            &mut record.transform,
+            record.collider,
+            record.velocity.get_velocity(),
+            Some(&mut record.grounded),
+            time.delta_seconds(),
+        );
+        record.jump_cooldown.timer.tick(time.delta());
+        history.push(PlayerSnapshot {
+            translation: record.transform.translation,
+            kinematics: record.velocity.clone(),
+        });
+        history.prune(100);
     }
 }
 
@@ -542,6 +595,8 @@ pub struct LocalPlayerFilter {
     _filter: (With<Player>, With<LocalPlayerTag>),
 }
 
+/// Grabs the most recent input and applies it locally. After applying the input,
+/// a snapshot of the player is stored in the snapshot history.
 pub fn predict_movement(
     mut context: ResMut<RapierContext>,
     ibuf: Res<InputBuffer>,

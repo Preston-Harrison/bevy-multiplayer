@@ -6,7 +6,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::shared::{physics::char_ctrl_to_move_opts, tick::Tick, GameLogic, SpawnMode};
 
-use self::{client::PlayerClientPlugin, server::LastInputTracker};
+use self::{
+    client::PlayerClientPlugin,
+    server::{LastInputTracker, PlayerServerPlugin},
+};
 
 use super::{grounded::Grounded, LastSyncTracker, NetworkObject};
 
@@ -22,18 +25,7 @@ impl Plugin for PlayerPlugin {
         app.add_systems(FixedUpdate, (tick_jump_cooldown.in_set(GameLogic::Start),));
 
         if self.is_server {
-            app.insert_resource(server::ClientInputs::default());
-            app.add_systems(
-                FixedUpdate,
-                (
-                    server::apply_inputs.in_set(GameLogic::Game),
-                    server::read_inputs.in_set(GameLogic::ReadInput),
-                    server::broadcast_player_data.in_set(GameLogic::Sync),
-                    server::broadcast_player_spawns.in_set(GameLogic::Sync),
-                    server::load_player.in_set(GameLogic::Sync),
-                    server::init_players.in_set(GameLogic::Spawn),
-                ),
-            );
+            app.add_plugins(PlayerServerPlugin);
         } else {
             app.add_plugins(PlayerClientPlugin);
         }

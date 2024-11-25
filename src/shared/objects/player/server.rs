@@ -1,4 +1,4 @@
-use bevy::{prelude::*, utils::HashMap};
+use bevy::{ecs::query::QueryData, prelude::*, utils::HashMap};
 use bevy_rapier3d::prelude::*;
 use bevy_renet::renet::{ClientId, DefaultChannel, RenetServer};
 
@@ -19,17 +19,41 @@ use crate::{
             NetworkObject,
         },
         tick::Tick,
-        SpawnMode,
+        GameLogic, SpawnMode,
     },
 };
 
 use super::PlayerKinematics;
 
+pub struct PlayerServerPlugin;
+
+impl Plugin for PlayerServerPlugin {
+    fn build(&self, app: &mut App) {
+        app.insert_resource(ClientInputs::default());
+        app.add_systems(
+            FixedUpdate,
+            (
+                apply_inputs.in_set(GameLogic::Game),
+                read_inputs.in_set(GameLogic::ReadInput),
+                broadcast_player_data.in_set(GameLogic::Sync),
+                broadcast_player_spawns.in_set(GameLogic::Sync),
+                load_player.in_set(GameLogic::Sync),
+                init_players.in_set(GameLogic::Spawn),
+            ),
+        );
+    }
+}
+
+/// Tracks the order of the most recent processed input for a player. The input
+/// for the player should be processed by the time this is updated.
 #[derive(Component, Default)]
 pub struct LastInputTracker {
     order: u64,
 }
 
+/// Stores a mapping of player network objects to a list of unprocessed inputs.
+/// Also stores a mapping of network objects to their client id.
+///
 /// TODO: fix memory leaks as this doesn't clean up disconnected clients.
 #[derive(Resource, Default)]
 pub struct ClientInputs {
@@ -82,6 +106,7 @@ impl ClientInputs {
     }
 }
 
+/// Spawns a new player when a `PlayerNeedsInit` event is received.
 pub fn init_players(
     mut player_init: EventReader<PlayerNeedsInit>,
     mut commands: Commands,
@@ -108,6 +133,7 @@ pub fn init_players(
     }
 }
 
+/// Broadcasts a player spawn event whenever a new player is added.
 pub fn broadcast_player_spawns(
     query: Query<(&NetworkObject, &Transform), Added<Player>>,
     mut server: ResMut<RenetServer>,
@@ -127,6 +153,8 @@ pub fn broadcast_player_spawns(
     }
 }
 
+/// Sends a `PlayerPositionSync` to everyone player except the player whose position
+/// it is. Sends an `OwnedPlayerSync` to the player who owns the position.
 pub fn broadcast_player_data(
     query: Query<
         (
@@ -169,67 +197,59 @@ pub fn broadcast_player_data(
     }
 }
 
+#[derive(QueryData)]
+#[query_data(mutable)]
+pub struct InputQuery {
+    entity: Entity,
+    transform: &'static mut Transform,
+    net_obj: &'static NetworkObject,
+    last_input_tracker: &'static mut LastInputTracker,
+    controller: &'static KinematicCharacterController,
+    collider: &'static Collider,
+    kinematics: &'static mut PlayerKinematics,
+    grounded: &'static mut Grounded,
+    jump_cooldown: &'static mut JumpCooldown,
+}
+
+/// Grabs the most recent input for each player and applies it using `apply_input`.
 pub fn apply_inputs(
-    mut query: Query<
-        (
-            Entity,
-            &mut Transform,
-            &NetworkObject,
-            &mut LastInputTracker,
-            &KinematicCharacterController,
-            &Collider,
-            &mut PlayerKinematics,
-            &mut Grounded,
-            &mut JumpCooldown,
-        ),
-        With<Player>,
-    >,
+    mut query: Query<InputQuery, With<Player>>,
     time: Res<Time>,
     mut inputs: ResMut<ClientInputs>,
     mut context: ResMut<RapierContext>,
     mut server: ResMut<RenetServer>,
 ) {
     let net_obj_inputs = inputs.pop_inputs();
-    for (
-        entity,
-        mut transform,
-        net_obj,
-        mut last_input_tracker,
-        controller,
-        shape,
-        mut kinematics,
-        mut grounded,
-        mut jump_cooldown,
-    ) in query.iter_mut()
-    {
-        if let Some(input) = net_obj_inputs.get(net_obj) {
+    for mut item in query.iter_mut() {
+        if let Some(input) = net_obj_inputs.get(item.net_obj) {
             if let Some(shot) = &input.input.shot {
-                let Some(inputter) = inputs.get_client_id(net_obj) else {
+                let Some(inputter) = inputs.get_client_id(item.net_obj) else {
                     error!("input without client");
                     continue;
                 };
                 let message =
-                    UnreliableMessageFromServer::PlayerShot(net_obj.clone(), shot.clone());
+                    UnreliableMessageFromServer::PlayerShot(item.net_obj.clone(), shot.clone());
                 let bytes = bincode::serialize(&message).unwrap();
                 server.broadcast_message_except(inputter, DefaultChannel::Unreliable, bytes);
             }
             super::apply_input(
                 &mut context,
                 &input.input,
-                &mut transform,
-                shape,
-                controller,
+                &mut item.transform,
+                item.collider,
+                item.controller,
                 &time,
-                entity,
-                &mut kinematics,
-                &mut grounded,
-                &mut jump_cooldown,
+                item.entity,
+                &mut item.kinematics,
+                &mut item.grounded,
+                &mut item.jump_cooldown,
             );
-            last_input_tracker.order = input.order;
+            item.last_input_tracker.order = input.order;
         }
     }
 }
 
+/// Listens for Input messages from clients and stores them in a buffer.
 pub fn read_inputs(
     mut inputs: ResMut<ClientInputs>,
     reader: Res<server::MessageReaderOnServer>,
@@ -248,6 +268,8 @@ pub fn read_inputs(
     inputs.prune(10);
 }
 
+/// Informs the new player of all the currently spawned players whenever a
+/// `PlayerWantsUpdates` event is received.
 pub fn load_player(
     mut player_load: EventReader<PlayerWantsUpdates>,
     player_query: Query<(&NetworkObject, &Transform), With<Player>>,

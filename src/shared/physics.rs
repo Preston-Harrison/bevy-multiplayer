@@ -64,7 +64,6 @@ pub fn apply_kinematics(
     grounded: Option<&mut Grounded>,
     delta_seconds: f32,
 ) {
-    info!("applying kinematics");
     let output = context.move_shape(
         movement * delta_seconds,
         collider,
