@@ -4,10 +4,7 @@ use bevy::prelude::*;
 use bevy_rapier3d::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::shared::{
-    physics::char_ctrl_to_move_opts,
-    GameLogic,
-};
+use crate::shared::{physics::char_ctrl_to_move_opts, GameLogic};
 
 use self::client::PlayerClientPlugin;
 
@@ -16,21 +13,13 @@ use super::{grounded::Grounded, NetworkObject};
 pub mod client;
 pub mod server;
 
-const JUMP_KEY: &str = "jump";
-const JUMP_VELOCITY: Vec3 = Vec3::new(0.0, 10.0, 0.0);
-
 pub struct PlayerPlugin {
     pub is_server: bool,
 }
 
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
-            FixedUpdate,
-            (
-                tick_jump_cooldown.in_set(GameLogic::Start),
-            ),
-        );
+        app.add_systems(FixedUpdate, (tick_jump_cooldown.in_set(GameLogic::Start),));
 
         if self.is_server {
             app.insert_resource(server::ClientInputs::default());
@@ -51,7 +40,7 @@ impl Plugin for PlayerPlugin {
     }
 }
 
-#[derive(Component, Default)]
+#[derive(Component)]
 pub struct JumpCooldown {
     timer: Timer,
 }
@@ -97,16 +86,9 @@ pub struct Player;
 #[derive(Component)]
 pub struct LocalPlayerTag;
 
-fn tick_jump_cooldown(
-    mut query: Query<(&mut JumpCooldown, Option<&mut client::JumpCooldownHistory>)>,
-    time: Res<Time>,
-) {
-    for (mut cooldown, history) in query.iter_mut() {
+fn tick_jump_cooldown(mut query: Query<&mut JumpCooldown>, time: Res<Time>) {
+    for mut cooldown in query.iter_mut() {
         cooldown.timer.tick(time.delta());
-        if let Some(mut history) = history {
-            history.push(cooldown.timer.elapsed());
-            history.prune();
-        }
     }
 }
 fn apply_input(
@@ -122,14 +104,16 @@ fn apply_input(
     jump_cooldown: &mut JumpCooldown,
 ) {
     let movement = input.direction * 5.0 * time.delta_seconds();
-    if input.jump && grounded.grounded_this_tick() && jump_cooldown.timer.finished() {
-        info!("setting jump from apply_input");
-        kinematics.tick(false, true, time.delta());
+    if input.jump && grounded.is_grounded() && jump_cooldown.timer.finished() {
+        // info!("setting jump from apply_input");
+        kinematics.update(false, true);
         jump_cooldown.timer.reset();
+        info!("resetting");
     } else {
-        info!("clearing jump from apply_input");
-        kinematics.tick(grounded.grounded_this_tick(), false, time.delta());
+        // info!("clearing jump from apply_input");
+        kinematics.update(grounded.is_grounded(), false);
     }
+    kinematics.tick(time.delta());
 
     let out = context.move_shape(
         movement,
@@ -167,16 +151,19 @@ impl Default for PlayerKinematics {
 }
 
 impl PlayerKinematics {
-    pub fn tick(&mut self, is_grounded: bool, jumped: bool, delta: Duration) {
+    pub fn tick(&mut self, delta: Duration) {
+        self.time_in_air = match self.time_in_air {
+            AirTime::Grounded => AirTime::Airborne(delta),
+            AirTime::Airborne(time) => AirTime::Airborne(time + delta),
+        };
+    }
+
+    pub fn update(&mut self, is_grounded: bool, jumped: bool) {
         self.is_jumping |= jumped;
         if is_grounded {
             self.time_in_air = AirTime::Grounded;
             self.is_jumping = false;
         } else {
-            self.time_in_air = match self.time_in_air {
-                AirTime::Grounded => AirTime::Airborne(delta),
-                AirTime::Airborne(time) => AirTime::Airborne(time + delta),
-            };
         }
     }
 
@@ -186,7 +173,7 @@ impl PlayerKinematics {
             AirTime::Grounded => Vec3::ZERO,
         };
         let jump = if self.is_jumping {
-            Vec3::Y * 20.0
+            Vec3::Y * 5.0
         } else {
             Vec3::ZERO
         };

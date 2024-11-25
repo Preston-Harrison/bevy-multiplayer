@@ -5,7 +5,10 @@ use bevy_renet::renet::{ClientId, DefaultChannel, RenetServer};
 use serde::{Deserialize, Serialize};
 
 use crate::shared::{
-    objects::{player::{PlayerKinematics, Shot}, NetworkObject},
+    objects::{
+        player::{PlayerKinematics, Shot},
+        NetworkObject,
+    },
     tick::Tick,
     GameLogic,
 };

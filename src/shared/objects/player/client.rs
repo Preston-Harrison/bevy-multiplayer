@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, time::Duration};
+use std::collections::VecDeque;
 
 use bevy::{
     color::palettes::tailwind::{GREEN_500, YELLOW_500},
@@ -63,29 +63,6 @@ impl Plugin for PlayerClientPlugin {
 // For debugging
 const RECONCILE: bool = true;
 const PREDICT: bool = true;
-
-#[derive(Component, Default)]
-pub struct JumpCooldownHistory {
-    history: VecDeque<Duration>,
-}
-
-impl JumpCooldownHistory {
-    /// Adds a new elapsed time to the history.
-    pub fn push(&mut self, elapsed_time: Duration) {
-        self.history.push_back(elapsed_time);
-        // Optionally prune to maintain the size limit
-        if self.history.len() > 100 {
-            self.prune();
-        }
-    }
-
-    /// Prunes the history to keep only the last 100 entries.
-    pub fn prune(&mut self) {
-        while self.history.len() > 100 {
-            self.history.pop_front(); // Removes the oldest entry
-        }
-    }
-}
 
 #[derive(Resource)]
 pub struct TickBuffer<T> {
@@ -166,7 +143,6 @@ pub struct PlayerSnapshot {
 }
 impl PlayerSnapshot {
     fn is_different(&self, owned_sync: &OwnedPlayerSync) -> bool {
-        // Check translation difference
         if owned_sync.translation.distance(self.translation) > 0.1 {
             return true;
         }
@@ -495,10 +471,17 @@ pub fn recv_position_sync(
                         None => false,
                     };
                     if !should_reconcile || !RECONCILE {
-                        info!("no rollback needed");
                         continue;
                     }
-                    info!("rolling back");
+                    if snapshot
+                        .unwrap()
+                        .kinematics
+                        .is_different(&owned_sync.kinematics)
+                    {
+                        warn!("rolling back, kinematics differ");
+                    } else {
+                        warn!("rolling back, translations differ");
+                    }
                     record.last_sync_tracker.last_tick = owned_sync.tick.clone();
                     record.transform.translation = owned_sync.translation;
                     *record.velocity = owned_sync.kinematics.clone();
@@ -612,8 +595,7 @@ pub fn spawn_player(commands: &mut Commands, player_info: &PlayerInit) {
         ))
         .insert(Grounded::default())
         .insert(player_info.net_obj.clone())
-        .insert(JumpCooldown::default())
-        .insert(JumpCooldownHistory::default())
+        .insert(JumpCooldown::new())
         .insert(PlayerKinematics::default())
         .insert(LocalPlayerTag);
 }
