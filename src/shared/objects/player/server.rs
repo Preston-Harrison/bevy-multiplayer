@@ -132,12 +132,21 @@ pub fn broadcast_player_spawns(
 }
 
 pub fn broadcast_player_data(
-    query: Query<(&NetworkObject, &Transform, &LastInputTracker, &Kinematics), With<Player>>,
+    query: Query<
+        (
+            &NetworkObject,
+            &Transform,
+            &LastInputTracker,
+            &Kinematics,
+            &JumpCooldown,
+        ),
+        With<Player>,
+    >,
     client_netmap: Res<ClientNetworkObjectMap>,
     mut server: ResMut<RenetServer>,
     tick: Res<Tick>,
 ) {
-    for (obj, transform, input_tracker, kinematics) in query.iter() {
+    for (obj, transform, input_tracker, kinematics, jump_cooldown) in query.iter() {
         let Some(client_id) = client_netmap.net_obj_to_client.get(obj) else {
             warn!("no client id for player obj in broadcast_player_data");
             continue;
@@ -157,6 +166,7 @@ pub fn broadcast_player_data(
             tick: tick.clone(),
             kinematics: kinematics.clone(),
             last_input_order: input_tracker.order,
+            jump_cooldown_elapsed: jump_cooldown.timer.elapsed(),
         });
         let bytes = bincode::serialize(&message).unwrap();
         server.send_message(*client_id, DefaultChannel::Unreliable, bytes);

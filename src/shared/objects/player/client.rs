@@ -2,6 +2,7 @@ use std::{collections::VecDeque, time::Duration};
 
 use bevy::{
     color::palettes::tailwind::{GREEN_500, YELLOW_500},
+    ecs::query::{QueryData, QueryFilter as ECSQueryFilter},
     input::mouse::MouseMotion,
     prelude::*,
     window::{CursorGrabMode, PrimaryWindow},
@@ -12,7 +13,7 @@ use bevy_renet::renet::{DefaultChannel, RenetClient};
 use crate::{
     message::{
         client::{MessageReaderOnClient, OrderedInput, UnreliableMessageFromClient},
-        server::{PlayerInit, ReliableMessageFromServer, UnreliableMessageFromServer},
+        server::{OwnedPlayerSync, PlayerInit, ReliableMessageFromServer, UnreliableMessageFromServer},
         spawn::NetworkSpawn,
     },
     shared::{
@@ -21,6 +22,7 @@ use crate::{
             gizmo::spawn_raycast_visual, grounded::Grounded, LastSyncTracker, NetworkObject,
         },
         physics::{apply_kinematics, Kinematics},
+        GameLogic,
     },
 };
 
@@ -28,6 +30,34 @@ use super::{
     Input, JumpCooldown, LocalPlayer, LocalPlayerTag, Player, Shot, ShotNothing, ShotTarget,
 };
 
+pub struct PlayerClientPlugin;
+
+impl Plugin for PlayerClientPlugin {
+    fn build(&self, app: &mut App) {
+        app.insert_resource(InputBuffer::default());
+        app.insert_resource(TickBuffer::<PlayerSnapshot>::default());
+        app.add_systems(
+            FixedUpdate,
+            (
+                spawn_player_camera, // Runs when LocalPlayerTag is added
+                read_input.in_set(GameLogic::ReadInput),
+                spawn_players.in_set(GameLogic::Spawn),
+                recv_position_sync.in_set(GameLogic::Sync),
+                recv_player_shot.in_set(GameLogic::Sync),
+                predict_movement.in_set(GameLogic::Game),
+            ),
+        );
+        app.add_systems(
+            Update,
+            (
+                rotate_player,
+                rubber_band_player_camera.after(rotate_player),
+            ),
+        );
+    }
+}
+
+// For debugging
 const RECONCILE: bool = true;
 const PREDICT: bool = true;
 
@@ -54,16 +84,53 @@ impl JumpCooldownHistory {
     }
 }
 
+#[derive(Resource)]
+pub struct TickBuffer<T> {
+    items: VecDeque<T>,
+}
+
+impl<T> Default for TickBuffer<T> {
+    fn default() -> Self {
+        Self {
+            items: VecDeque::new(),
+        }
+    }
+}
+
+impl<T> TickBuffer<T> {
+    fn push(&mut self, item: T) {
+        self.items.push_back(item);
+    }
+
+    fn prune(&mut self, max_length: usize) {
+        while self.items.len() > max_length {
+            self.items.pop_front();
+        }
+    }
+
+    fn get_latest(&self) -> Option<&T> {
+        self.get_nth_from_latest(0)
+    }
+
+    fn get_nth_from_latest(&self, n: usize) -> Option<&T> {
+        if n >= self.items.len() {
+            None
+        } else {
+            self.items.get(self.items.len() - n - 1)
+        }
+    }
+}
+
 #[derive(Resource, Default)]
 pub struct InputBuffer {
-    inputs: VecDeque<OrderedInput>,
+    buffer: TickBuffer<OrderedInput>,
     count: u64,
 }
 
 impl InputBuffer {
     fn push_input(&mut self, input: Input) -> u64 {
         self.count += 1;
-        self.inputs.push_back(OrderedInput {
+        self.buffer.push(OrderedInput {
             input,
             order: self.count,
         });
@@ -71,27 +138,38 @@ impl InputBuffer {
     }
 
     fn prune(&mut self, max_length: usize) {
-        while self.inputs.len() > max_length {
-            self.inputs.pop_front();
-        }
+        self.buffer.prune(max_length);
     }
 
     fn inputs_after_order(&self, order: u64) -> Vec<OrderedInput> {
-        self.inputs
+        self.buffer
+            .items
             .iter()
             .filter(|input| input.order > order)
             .cloned()
             .collect()
     }
 
-    fn get_latest(&self) -> Option<Input> {
-        let len = self.inputs.len();
-        if len == 0 {
-            return None;
+    fn get_latest(&self) -> Option<&OrderedInput> {
+        self.buffer.get_latest()
+    }
+}
+
+type SnapshotHistory = TickBuffer<PlayerSnapshot>;
+
+pub struct PlayerSnapshot {
+    translation: Vec3,
+    kinematics: Kinematics,
+    order: u64,
+}
+impl PlayerSnapshot {
+    fn is_different(&self, owned_sync: &OwnedPlayerSync) -> bool {
+        // Check translation difference
+        if owned_sync.translation.distance(self.translation) > 0.1 {
+            return true;
         }
-        self.inputs
-            .get(self.inputs.len() - 1)
-            .map(|v| v.input.clone())
+        return false;
+        return self.kinematics.is_different(&owned_sync.kinematics);
     }
 }
 
@@ -356,6 +434,20 @@ pub fn spawn_players(
     }
 }
 
+#[derive(QueryData)]
+#[query_data(mutable)]
+pub struct LocalPlayerQueryForSync {
+    entity: Entity,
+    transform: &'static mut Transform,
+    net_obj: &'static NetworkObject,
+    last_sync_tracker: &'static mut LastSyncTracker<Transform>,
+    collider: &'static Collider,
+    controller: &'static KinematicCharacterController,
+    grounded: &'static mut Grounded,
+    kinematics: &'static mut Kinematics,
+    jump_cooldown: &'static mut JumpCooldown,
+}
+
 pub fn recv_position_sync(
     reader: Res<MessageReaderOnClient>,
     mut nonlocal_players: Query<
@@ -366,22 +458,9 @@ pub fn recv_position_sync(
         ),
         (With<Player>, Without<LocalPlayerTag>),
     >,
-    mut local_player: Query<
-        (
-            Entity,
-            &mut Transform,
-            &NetworkObject,
-            &mut LastSyncTracker<Transform>,
-            &Collider,
-            &KinematicCharacterController,
-            &mut Grounded,
-            &mut Kinematics,
-            &mut JumpCooldown,
-            &mut JumpCooldownHistory,
-        ),
-        (With<Player>, With<LocalPlayerTag>),
-    >,
+    mut local_player: Query<LocalPlayerQueryForSync, LocalPlayerFilter>,
     ibuf: Res<InputBuffer>,
+    mut history: ResMut<SnapshotHistory>,
     time: Res<Time>,
     mut context: ResMut<RapierContext>,
 ) {
@@ -396,61 +475,69 @@ pub fn recv_position_sync(
                 }
             }
             UnreliableMessageFromServer::OwnedPlayerSync(owned_sync) => {
-                let Ok(record) = local_player.get_single_mut() else {
+                let Ok(mut record) = local_player.get_single_mut() else {
                     continue;
                 };
-                let (
-                    entity,
-                    mut transform,
-                    obj,
-                    mut last_sync_tracker,
-                    shape,
-                    controller,
-                    mut grounded,
-                    mut kinematics,
-                    mut jump_cooldown,
-                    mut jump_history,
-                ) = record;
-                if *obj == owned_sync.net_obj && last_sync_tracker.last_tick < owned_sync.tick {
-                    last_sync_tracker.last_tick = owned_sync.tick.clone();
-                    transform.translation = owned_sync.translation;
-                    *kinematics = owned_sync.kinematics.clone();
-                    if RECONCILE {
-                        let mut inputs = ibuf.inputs_after_order(owned_sync.last_input_order);
-                        for _ in 0..(inputs.len() - 1) {
-                            jump_history.history.pop_back();
-                        }
-                        if let Some(duration) = jump_history.history.pop_back() {
-                            jump_cooldown.timer.set_elapsed(duration);
-                        }
-                        // BOOKMARK: rollback
-                        inputs.pop(); // Current frame input
-                        for input in inputs {
-                            super::apply_input(
-                                &mut context,
-                                &input.input,
-                                &mut transform,
-                                shape,
-                                controller,
-                                &time,
-                                entity,
-                                &mut kinematics,
-                                &mut grounded,
-                                &mut jump_cooldown,
-                            );
-                            apply_kinematics(
-                                &mut context,
-                                entity,
-                                controller,
-                                &mut transform,
-                                shape,
-                                &mut kinematics,
-                                Some(&mut grounded),
-                                &time,
-                            );
-                            jump_history.push(jump_cooldown.timer.elapsed());
-                            jump_cooldown.timer.tick(time.delta());
-                        }
+                let is_local = *record.net_obj == owned_sync.net_obj;
+                let is_most_recent = record.last_sync_tracker.last_tick < owned_sync.tick;
+                if is_local && is_most_recent {
+                    record.last_sync_tracker.last_tick = owned_sync.tick.clone();
+
+                    let mut inputs = ibuf.inputs_after_order(owned_sync.last_input_order);
+                    inputs.pop(); // Current frame input, will be processed later.
+                    if inputs.len() == 0 {
+                        continue;
+                    }
+                    let snapshot = history.get_nth_from_latest(inputs.len());
+                    let should_reconcile = match snapshot {
+                        Some(snapshot) => {
+                            // assert_eq!(snapshot.order, owned_sync.last_input_order, "snapshot is syncing from wrong input order");
+                            snapshot.is_different(owned_sync)
+                        },
+                        None => false,
+                    };
+                    if !should_reconcile || !RECONCILE {
+                        info!("no rollback needed");
+                        continue;
+                    }
+                    info!("rolling back");
+                    record.last_sync_tracker.last_tick = owned_sync.tick.clone();
+                    record.transform.translation = owned_sync.translation;
+                    *record.kinematics = owned_sync.kinematics.clone();
+                    record
+                        .jump_cooldown
+                        .timer
+                        .set_elapsed(owned_sync.jump_cooldown_elapsed);
+                    // BOOKMARK: rollback
+                    for input in inputs {
+                        super::apply_input(
+                            &mut context,
+                            &input.input,
+                            &mut record.transform,
+                            record.collider,
+                            record.controller,
+                            &time,
+                            record.entity,
+                            &mut record.kinematics,
+                            &mut record.grounded,
+                            &mut record.jump_cooldown,
+                        );
+                        apply_kinematics(
+                            &mut context,
+                            record.entity,
+                            record.controller,
+                            &mut record.transform,
+                            record.collider,
+                            &mut record.kinematics,
+                            Some(&mut record.grounded),
+                            &time,
+                        );
+                        record.jump_cooldown.timer.tick(time.delta());
+                        history.push(PlayerSnapshot {
+                            translation: record.transform.translation,
+                            kinematics: record.kinematics.clone(),
+                            order: input.order,
+                        });
                     }
                 }
             }
@@ -459,61 +546,60 @@ pub fn recv_position_sync(
     }
 }
 
+#[derive(QueryData)]
+#[query_data(mutable)]
+pub struct LocalPlayerQuery {
+    entity: Entity,
+    transform: &'static mut Transform,
+    collider: &'static Collider,
+    controller: &'static KinematicCharacterController,
+    grounded: &'static mut Grounded,
+    kinematics: &'static mut Kinematics,
+    jump_cooldown: &'static mut JumpCooldown,
+}
+
+#[derive(ECSQueryFilter)]
+pub struct LocalPlayerFilter {
+    _filter: (With<Player>, With<LocalPlayerTag>),
+}
+
 pub fn predict_movement(
     mut context: ResMut<RapierContext>,
     ibuf: Res<InputBuffer>,
-    mut local_player: Query<
-        (
-            Entity,
-            &mut Transform,
-            &Collider,
-            &KinematicCharacterController,
-            &mut Grounded,
-            &mut Kinematics,
-            &mut JumpCooldown,
-        ),
-        (With<Player>, With<LocalPlayerTag>),
-    >,
+    mut snapshots: ResMut<TickBuffer<PlayerSnapshot>>,
+    mut local_player: Query<LocalPlayerQuery, LocalPlayerFilter>,
     time: Res<Time>,
 ) {
-    let Ok(local_player) = local_player.get_single_mut() else {
+    if !PREDICT {
+        return;
+    }
+    let Ok(mut local_player) = local_player.get_single_mut() else {
         warn!("no local player");
         return;
     };
-
     let Some(input) = ibuf.get_latest() else {
         warn!("no latest input");
         return;
     };
 
-    if !PREDICT {
-        return;
-    }
-
-    info!("vec: {}", input.direction.length());
-
-    let (
-        entity,
-        mut transform,
-        collider,
-        controller,
-        mut grounded,
-        mut kinematics,
-        mut jump_cooldown,
-    ) = local_player;
-
     super::apply_input(
         &mut context,
-        &input,
-        &mut transform,
-        collider,
-        controller,
+        &input.input,
+        &mut local_player.transform,
+        local_player.collider,
+        local_player.controller,
         &time,
-        entity,
-        &mut kinematics,
-        &mut grounded,
-        &mut jump_cooldown,
+        local_player.entity,
+        &mut local_player.kinematics,
+        &mut local_player.grounded,
+        &mut local_player.jump_cooldown,
     );
+    snapshots.push(PlayerSnapshot {
+        translation: local_player.transform.translation,
+        kinematics: local_player.kinematics.clone(),
+        order: input.order,
+    });
+    snapshots.prune(100);
 }
 
 pub fn spawn_player(commands: &mut Commands, player_info: &PlayerInit) {

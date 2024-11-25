@@ -9,6 +9,8 @@ use crate::shared::{
     GameLogic,
 };
 
+use self::client::PlayerClientPlugin;
+
 use super::{grounded::Grounded, NetworkObject};
 
 pub mod client;
@@ -45,25 +47,7 @@ impl Plugin for PlayerPlugin {
                 ),
             );
         } else {
-            app.insert_resource(client::InputBuffer::default());
-            app.add_systems(
-                FixedUpdate,
-                (
-                    client::spawn_player_camera,
-                    client::read_input.in_set(GameLogic::Start),
-                    client::spawn_players.in_set(GameLogic::Spawn),
-                    client::recv_position_sync.in_set(GameLogic::Sync),
-                    client::recv_player_shot.in_set(GameLogic::Sync),
-                    client::predict_movement.in_set(GameLogic::Game),
-                ),
-            );
-            app.add_systems(
-                Update,
-                (
-                    client::rotate_player,
-                    client::rubber_band_player_camera.after(client::rotate_player),
-                ),
-            );
+            app.add_plugins(PlayerClientPlugin);
         }
     }
 }

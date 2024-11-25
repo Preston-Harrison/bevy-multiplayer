@@ -67,6 +67,57 @@ impl Kinematics {
     pub fn get_displacement(&self, seconds: f32) -> Vec3 {
         self.velocity.values().sum::<Vec3>() * seconds
     }
+
+    pub fn is_different(&self, other: &Kinematics) -> bool {
+        // Check velocity differences
+        if self.velocity.len() != other.velocity.len() {
+            return true;
+        }
+
+        for (key, self_velocity) in &self.velocity {
+            match other.velocity.get(key) {
+                Some(other_velocity) => {
+                    if (*self_velocity - *other_velocity).length() > 0.1 {
+                        return true;
+                    }
+                }
+                None => return true, // Key not found in other's velocities
+            }
+        }
+
+        // Check for extra keys in other's velocities
+        for key in other.velocity.keys() {
+            if !self.velocity.contains_key(key) {
+                return true;
+            }
+        }
+
+        // Check acceleration differences
+        if self.acceleration.len() != other.acceleration.len() {
+            return true;
+        }
+
+        for (key, self_acceleration) in &self.acceleration {
+            match other.acceleration.get(key) {
+                Some(other_acceleration) => {
+                    if (*self_acceleration - *other_acceleration).length() > 0.1 {
+                        return true;
+                    }
+                }
+                None => return true, // Key not found in other's accelerations
+            }
+        }
+
+        // Check for extra keys in other's accelerations
+        for key in other.acceleration.keys() {
+            if !self.acceleration.contains_key(key) {
+                return true;
+            }
+        }
+
+        // If all checks pass, the snapshots are considered the same
+        false
+    }
 }
 
 const GRAVITY: f32 = -10.0;
@@ -124,6 +175,7 @@ pub fn apply_kinematics(
     grounded: Option<&mut Grounded>,
     time: &Time,
 ) {
+    info!("applying kinematics");
     kinematics.accelerate(time.delta_seconds());
     let movement = kinematics.get_displacement(time.delta_seconds());
     let output = context.move_shape(

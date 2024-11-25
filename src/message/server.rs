@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use bevy::prelude::*;
 use bevy_renet::renet::{ClientId, DefaultChannel, RenetServer};
 use serde::{Deserialize, Serialize};
@@ -57,6 +59,7 @@ pub struct OwnedPlayerSync {
     pub tick: Tick,
     pub last_input_order: u64,
     pub kinematics: Kinematics,
+    pub jump_cooldown_elapsed: Duration,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
