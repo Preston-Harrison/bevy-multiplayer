@@ -243,10 +243,14 @@ pub fn rubber_band_player_camera(
 #[derive(Default)]
 pub struct PressedShootLastFrame(bool);
 
+#[derive(Default)]
+pub struct IsFreecam(bool);
+
 /// Reads input from the keyboard and mouse and stores it in a buffer. Doesn't
 /// include rotation, like looking around.
 pub fn read_input(
     mut pressed_shoot: Local<PressedShootLastFrame>,
+    mut freecam: Local<IsFreecam>,
     mouse_input: Res<ButtonInput<MouseButton>>,
     keyboard_input: Res<ButtonInput<KeyCode>>,
     mut ibuf: ResMut<InputBuffer>,
@@ -263,6 +267,10 @@ pub fn read_input(
         return;
     };
     let local_direction = get_direction(&keyboard_input).normalize_or_zero();
+    if keyboard_input.just_pressed(KeyCode::KeyQ) {
+        freecam.0 = !freecam.0;
+    }
+
     let pressed_shoot_last_frame = pressed_shoot.0;
     pressed_shoot.0 = mouse_input.pressed(MouseButton::Left);
     let shoot = !pressed_shoot_last_frame && pressed_shoot.0;
@@ -598,7 +606,7 @@ pub struct LocalPlayerFilter {
 pub fn predict_movement(
     mut context: ResMut<RapierContext>,
     ibuf: Res<InputBuffer>,
-    mut snapshots: ResMut<TickBuffer<PlayerSnapshot>>,
+    mut snapshots: ResMut<SnapshotHistory>,
     mut local_player: Query<LocalPlayerQuery, LocalPlayerFilter>,
     time: Res<Time>,
 ) {

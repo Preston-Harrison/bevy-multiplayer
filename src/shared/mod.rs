@@ -18,6 +18,7 @@ pub mod physics;
 pub mod render;
 pub mod scenes;
 pub mod tick;
+pub mod proc;
 
 pub const SERVER_ADDR: &str = "127.0.0.1:5000";
 

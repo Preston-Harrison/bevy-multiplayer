@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, PrimaryWindow};
+use bevy_inspector_egui::quick::WorldInspectorPlugin;
 use bevy_renet::renet::transport::{ClientAuthentication, NetcodeClientTransport};
 use bevy_renet::renet::{ConnectionConfig, DefaultChannel, RenetClient};
 use bevy_renet::transport::NetcodeClientPlugin;
@@ -29,7 +30,7 @@ enum LoadState {
 pub fn run() {
     let is_server = false;
     App::new()
-        .add_plugins((DefaultPlugins, Client))
+        .add_plugins((DefaultPlugins, Client, WorldInspectorPlugin::new()))
         .insert_state(LoadState::Init)
         .add_systems(Startup, spawn_connect_button)
         .add_systems(OnEnter(LoadState::Connecting), load_local)
@@ -203,7 +204,6 @@ fn set_local_player(
     for msg in reader.reliable_messages() {
         match msg {
             ReliableMessageFromServer::InitPlayer(player_info) => {
-                println!("set local player");
                 server_info.set_player_obj = true;
                 commands.insert_resource(LocalPlayer(player_info.net_obj.clone()));
                 shared::objects::player::spawn_player(
@@ -215,7 +215,6 @@ fn set_local_player(
             }
             ReliableMessageFromServer::TickSync(sync) => {
                 let tick = get_client_tick(sync.tick, sync.unix_millis);
-                println!("tick recv {}", tick.get());
                 commands.insert_resource(tick);
                 server_info.tick = true;
             }
