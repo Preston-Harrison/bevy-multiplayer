@@ -9,6 +9,7 @@ use bevy_rapier3d::prelude::*;
 use noise::{NoiseFn, Perlin};
 
 pub mod shaders;
+pub mod tree;
 
 #[derive(Component)]
 pub struct ChunkTag {

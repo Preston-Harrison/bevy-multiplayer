@@ -1,6 +1,6 @@
 use std::f32::consts::PI;
 
-use bevy::color::palettes::css::{BLACK, BLUE};
+use bevy::color::palettes::css::BLUE;
 use bevy::color::palettes::tailwind::RED_500;
 use bevy::core_pipeline::prepass::DepthPrepass;
 use bevy::input::mouse::MouseMotion;
@@ -15,93 +15,10 @@ use bevy::window::{CursorGrabMode, PrimaryWindow};
 use bevy_rapier3d::prelude::*;
 use noise::Perlin;
 
+use crate::shared::proc::tree::{render_tree, Params};
 use crate::shared::proc::{ChunkTag, NoiseLayer, Terrain, TerrainMaterials};
 
-#[derive(Default)]
-struct PhysicsEnabled(bool);
-
 type TerrainResource = Terrain<StandardMaterial>;
-
-// Free camera system
-fn free_camera_movement(
-    mut physics_enabled: Local<PhysicsEnabled>,
-    time: Res<Time>,
-    keys: Res<ButtonInput<KeyCode>>,
-    mut query: Query<(
-        &mut Transform,
-        &mut KinematicCharacterController,
-        &mut FreeCamera,
-    )>,
-) {
-    for (mut transform, mut controller, camera) in query.iter_mut() {
-        if keys.just_pressed(KeyCode::KeyP) {
-            physics_enabled.0 = !physics_enabled.0;
-        }
-
-        let forward = transform.rotation.mul_vec3(Vec3::new(0.0, 0.0, -1.0));
-        let right = transform.rotation.mul_vec3(Vec3::new(1.0, 0.0, 0.0));
-
-        let mut wasd_velocity = Vec3::ZERO;
-        let mut vertical = 0.0;
-
-        if keys.pressed(KeyCode::KeyW) {
-            wasd_velocity += forward;
-        }
-        if keys.pressed(KeyCode::KeyS) {
-            wasd_velocity -= forward;
-        }
-        if keys.pressed(KeyCode::KeyA) {
-            wasd_velocity -= right;
-        }
-        if keys.pressed(KeyCode::KeyD) {
-            wasd_velocity += right;
-        }
-        if keys.pressed(KeyCode::Space) {
-            vertical += 1.0;
-        }
-        if keys.pressed(KeyCode::ShiftLeft) {
-            vertical -= 1.0;
-        }
-
-        wasd_velocity.y = 0.0;
-        wasd_velocity = wasd_velocity.normalize_or_zero();
-
-        if physics_enabled.0 {
-            controller.translation =
-                Some((wasd_velocity * camera.walk_speed + Vec3::Y * -9.8) * time.delta_seconds());
-        } else {
-            wasd_velocity.y = vertical;
-            transform.translation += wasd_velocity * time.delta_seconds() * camera.speed;
-        }
-    }
-}
-
-/// Rotates the player based on mouse movement.
-fn mouse_look(
-    mut mouse_motion: EventReader<MouseMotion>,
-    mut camera: Query<&mut Transform, With<FreeCamera>>,
-    q_windows: Query<&Window, With<PrimaryWindow>>,
-) {
-    let primary_window = q_windows.single();
-    if primary_window.cursor.grab_mode != CursorGrabMode::Locked {
-        return;
-    }
-    let Ok(mut camera) = camera.get_single_mut() else {
-        return;
-    };
-    for motion in mouse_motion.read() {
-        let yaw = -motion.delta.x * 0.003;
-        let pitch = -motion.delta.y * 0.002;
-        camera.rotate_y(yaw);
-        camera.rotate_local_x(pitch);
-    }
-}
-
-#[derive(Component)]
-struct FreeCamera {
-    speed: f32,
-    walk_speed: f32,
-}
 
 pub fn run() {
     App::new()
@@ -123,9 +40,16 @@ pub fn run() {
         .run();
 }
 
+#[derive(Component)]
+struct FreeCamera {
+    speed: f32,
+    walk_speed: f32,
+}
+
 fn setup(
     mut commands: Commands,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut meshes: ResMut<Assets<Mesh>>,
     asset_server: Res<AssetServer>,
 ) {
     let noise_layers = vec![
@@ -145,14 +69,14 @@ fn setup(
             frequency: 0.02,
         },
     ];
-    let materials = TerrainMaterials {
+    let terrain_materials = TerrainMaterials {
         grass: materials.add(StandardMaterial {
             base_color: LinearRgba::new(1.0, 0.37, 0.1, 1.0).into(),
             normal_map_texture: Some(asset_server.load("sand_dune_texture.png")),
             ..default()
         }),
     };
-    let terrain: TerrainResource = Terrain::new(100, 5, noise_layers, materials);
+    let terrain: TerrainResource = Terrain::new(100, 5, noise_layers, terrain_materials);
     commands.insert_resource(terrain);
 
     commands.spawn(DirectionalLightBundle {
@@ -196,6 +120,10 @@ fn setup(
         .insert(KinematicCharacterController {
             ..KinematicCharacterController::default()
         });
+
+    let mut tree_params = Params::new_desert_tree();
+    tree_params.root_transform = Transform::from_xyz(0.0, 1.0, 0.0);
+    render_tree(&mut commands, &mut meshes, &mut materials, &tree_params);
 }
 
 fn draw_gizmos(mut gizmos: Gizmos, query: Query<&ChunkTag>, terrain: Res<TerrainResource>) {
@@ -279,5 +207,83 @@ fn render_chunks(
         info!("reloading chunks");
         terrain.reload_chunks(active.0, position, &mut commands, &chunks, &mut meshes);
         active.0 = Some(position);
+    }
+}
+
+#[derive(Default)]
+struct PhysicsEnabled(bool);
+
+// Free camera system
+fn free_camera_movement(
+    mut physics_enabled: Local<PhysicsEnabled>,
+    time: Res<Time>,
+    keys: Res<ButtonInput<KeyCode>>,
+    mut query: Query<(
+        &mut Transform,
+        &mut KinematicCharacterController,
+        &mut FreeCamera,
+    )>,
+) {
+    for (mut transform, mut controller, camera) in query.iter_mut() {
+        if keys.just_pressed(KeyCode::KeyP) {
+            physics_enabled.0 = !physics_enabled.0;
+        }
+
+        let forward = transform.rotation.mul_vec3(Vec3::new(0.0, 0.0, -1.0));
+        let right = transform.rotation.mul_vec3(Vec3::new(1.0, 0.0, 0.0));
+
+        let mut wasd_velocity = Vec3::ZERO;
+        let mut vertical = 0.0;
+
+        if keys.pressed(KeyCode::KeyW) {
+            wasd_velocity += forward;
+        }
+        if keys.pressed(KeyCode::KeyS) {
+            wasd_velocity -= forward;
+        }
+        if keys.pressed(KeyCode::KeyA) {
+            wasd_velocity -= right;
+        }
+        if keys.pressed(KeyCode::KeyD) {
+            wasd_velocity += right;
+        }
+        if keys.pressed(KeyCode::Space) {
+            vertical += 1.0;
+        }
+        if keys.pressed(KeyCode::ShiftLeft) {
+            vertical -= 1.0;
+        }
+
+        wasd_velocity.y = 0.0;
+        wasd_velocity = wasd_velocity.normalize_or_zero();
+
+        if physics_enabled.0 {
+            controller.translation =
+                Some((wasd_velocity * camera.walk_speed + Vec3::Y * -9.8) * time.delta_seconds());
+        } else {
+            wasd_velocity.y = vertical;
+            transform.translation += wasd_velocity * time.delta_seconds() * camera.speed;
+        }
+    }
+}
+
+/// Rotates the player based on mouse movement.
+fn mouse_look(
+    mut mouse_motion: EventReader<MouseMotion>,
+    mut camera: Query<&mut Transform, With<FreeCamera>>,
+    q_windows: Query<&Window, With<PrimaryWindow>>,
+) {
+    let primary_window = q_windows.single();
+    if primary_window.cursor.grab_mode != CursorGrabMode::Locked {
+        return;
+    }
+    let Ok(mut camera) = camera.get_single_mut() else {
+        return;
+    };
+    for motion in mouse_motion.read() {
+        let yaw = -motion.delta.x * 0.003;
+        let pitch = -motion.delta.y * 0.002;
+        camera.rotate_y(yaw);
+        camera.rotate_local_x(pitch);
     }
 }
