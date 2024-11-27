@@ -1,5 +1,4 @@
 use bevy::{
-    pbr::NotShadowCaster,
     prelude::*,
     render::{
         mesh::{Indices, PrimitiveTopology},
@@ -8,6 +7,8 @@ use bevy::{
 };
 use bevy_rapier3d::prelude::*;
 use noise::{NoiseFn, Perlin};
+
+pub mod shaders;
 
 #[derive(Component)]
 pub struct ChunkTag {
@@ -22,25 +23,24 @@ pub struct NoiseLayer {
 
 /// Represents a terrain chunk.
 #[derive(Resource)]
-pub struct Terrain {
+pub struct Terrain<G: Material> {
     chunk_size: usize,
     radius: i32,
     grid_spacing: usize,
     noise_layers: Vec<NoiseLayer>,
-    materials: TerrainMaterials,
+    materials: TerrainMaterials<G>,
 }
 
-pub struct TerrainMaterials {
-    pub grass: Handle<StandardMaterial>,
-    pub water: Handle<StandardMaterial>,
+pub struct TerrainMaterials<G: Material> {
+    pub grass: Handle<G>,
 }
 
-impl Terrain {
+impl<G: Material> Terrain<G> {
     pub fn new(
         chunk_size: usize,
         grid_spacing: usize,
         noise_layers: Vec<NoiseLayer>,
-        materials: TerrainMaterials,
+        materials: TerrainMaterials<G>,
     ) -> Self {
         Self {
             chunk_size,
@@ -84,6 +84,7 @@ impl Terrain {
         let lod = level_of_detail;
         let grid_points = (self.chunk_size / (lod * self.grid_spacing)) + 1;
         let mut vertices = Vec::with_capacity(grid_points * grid_points);
+        let mut uvs = Vec::with_capacity(grid_points * grid_points);
         let mut indices = Vec::new();
 
         // Generate vertices and heights
@@ -110,11 +111,14 @@ impl Terrain {
                     height += noise_value * *amplitude as f32;
                 }
 
-                vertices.push([
-                    x as f32 * lod as f32 * self.grid_spacing as f32,
-                    height,
-                    z as f32 * lod as f32 * self.grid_spacing as f32,
-                ]);
+                let x_pos = x as f32 * lod as f32 * self.grid_spacing as f32;
+                let z_pos = z as f32 * lod as f32 * self.grid_spacing as f32;
+                vertices.push([x_pos, height, z_pos]);
+
+                // Compute UV coordinates
+                let u = x_pos / (self.chunk_size as f32);
+                let v = z_pos / (self.chunk_size as f32);
+                uvs.push([u, v]); // Add this line
             }
         }
 
@@ -143,8 +147,10 @@ impl Terrain {
             RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
         );
         mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, vertices);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
         mesh.insert_indices(Indices::U32(indices));
         mesh.compute_normals();
+        mesh.generate_tangents().expect("tangents to be generated");
 
         mesh
     }
@@ -165,7 +171,7 @@ impl Terrain {
         let position = self.chunk_to_world_position(chunk_position, Vec3::ZERO);
 
         commands.spawn((
-            PbrBundle {
+            MaterialMeshBundle {
                 mesh: mesh_handle,
                 material: self.materials.grass.clone(),
                 transform: Transform::from_translation(position),

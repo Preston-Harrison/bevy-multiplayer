@@ -1,25 +1,26 @@
 use std::f32::consts::PI;
 
-use bevy::color::palettes::css::{BLUE, GREEN};
+use bevy::color::palettes::css::{BLACK, BLUE};
 use bevy::color::palettes::tailwind::RED_500;
 use bevy::core_pipeline::prepass::DepthPrepass;
 use bevy::input::mouse::MouseMotion;
-use bevy::pbr::{MaterialPipeline, MaterialPipelineKey, NotShadowCaster};
+use bevy::pbr::{MaterialPipeline, MaterialPipelineKey};
 use bevy::prelude::*;
-use bevy::render::mesh::{Indices, Mesh, MeshVertexBufferLayoutRef, PrimitiveTopology};
-use bevy::render::render_asset::RenderAssetUsages;
+use bevy::render::mesh::{Mesh, MeshVertexBufferLayoutRef};
 use bevy::render::render_resource::{
     AsBindGroup, RenderPipelineDescriptor, ShaderRef, SpecializedMeshPipelineError,
 };
 use bevy::render::view::ColorGrading;
 use bevy::window::{CursorGrabMode, PrimaryWindow};
 use bevy_rapier3d::prelude::*;
-use noise::{NoiseFn, Perlin};
+use noise::Perlin;
 
 use crate::shared::proc::{ChunkTag, NoiseLayer, Terrain, TerrainMaterials};
 
 #[derive(Default)]
 struct PhysicsEnabled(bool);
+
+type TerrainResource = Terrain<StandardMaterial>;
 
 // Free camera system
 fn free_camera_movement(
@@ -104,7 +105,7 @@ struct FreeCamera {
 
 pub fn run() {
     App::new()
-        .add_plugins((DefaultPlugins, MaterialPlugin::<Water>::default()))
+        .add_plugins(DefaultPlugins)
         .add_plugins(RapierPhysicsPlugin::<NoUserData>::default())
         // .add_plugins(RapierDebugRenderPlugin::default())
         .add_systems(Startup, setup)
@@ -122,7 +123,11 @@ pub fn run() {
         .run();
 }
 
-fn setup(mut commands: Commands, mut materials: ResMut<Assets<StandardMaterial>>) {
+fn setup(
+    mut commands: Commands,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    asset_server: Res<AssetServer>,
+) {
     let noise_layers = vec![
         NoiseLayer {
             noise: Perlin::new(0),
@@ -131,31 +136,28 @@ fn setup(mut commands: Commands, mut materials: ResMut<Assets<StandardMaterial>>
         },
         NoiseLayer {
             noise: Perlin::new(1),
-            amplitude: 7.5,
+            amplitude: 5.0,
             frequency: 0.01,
         },
         NoiseLayer {
             noise: Perlin::new(2),
-            amplitude: 3.75,
+            amplitude: 0.5,
             frequency: 0.02,
         },
     ];
     let materials = TerrainMaterials {
         grass: materials.add(StandardMaterial {
-            base_color: GREEN.into(),
-            ..default()
-        }),
-        water: materials.add(StandardMaterial {
-            base_color: BLUE.into(),
+            base_color: LinearRgba::new(1.0, 0.37, 0.1, 1.0).into(),
+            normal_map_texture: Some(asset_server.load("sand_dune_texture.png")),
             ..default()
         }),
     };
-    let terrain = Terrain::new(100, 5, noise_layers, materials);
+    let terrain: TerrainResource = Terrain::new(100, 5, noise_layers, materials);
     commands.insert_resource(terrain);
 
     commands.spawn(DirectionalLightBundle {
         directional_light: DirectionalLight {
-            illuminance: light_consts::lux::FULL_DAYLIGHT,
+            illuminance: light_consts::lux::OVERCAST_DAY,
             shadows_enabled: true,
             ..default()
         },
@@ -196,7 +198,7 @@ fn setup(mut commands: Commands, mut materials: ResMut<Assets<StandardMaterial>>
         });
 }
 
-fn draw_gizmos(mut gizmos: Gizmos, query: Query<&ChunkTag>, terrain: Res<Terrain>) {
+fn draw_gizmos(mut gizmos: Gizmos, query: Query<&ChunkTag>, terrain: Res<TerrainResource>) {
     gizmos.arrow(Vec3::new(0.0, 0.0, 0.0), Vec3::new(20.0, 0.0, 0.0), BLUE);
     gizmos.arrow(Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 20.0), RED_500);
 
@@ -216,9 +218,6 @@ fn cursor_grab(
 ) {
     if buttons.just_pressed(MouseButton::Left) {
         let mut primary_window = q_windows.single_mut();
-
-        // for a game that doesn't use the cursor (like a shooter):
-        // use `Locked` mode to keep the cursor in one place
         primary_window.cursor.grab_mode = CursorGrabMode::Locked;
         primary_window.cursor.visible = false;
     }
@@ -267,7 +266,7 @@ fn render_chunks(
     player: Query<&Transform, With<FreeCamera>>,
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
-    terrain: Res<Terrain>,
+    terrain: Res<TerrainResource>,
     chunks: Query<(Entity, &ChunkTag)>,
 ) {
     let Ok(player) = player.get_single() else {
