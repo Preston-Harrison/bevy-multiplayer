@@ -5,14 +5,18 @@ use bevy::prelude::*;
 #[derive(Debug, Resource)]
 pub struct Params {
     pub root_transform: Transform,
-    pub children: u8,                  
-    pub levels: u8,                    
-    pub child_translation_factor: f32, 
-    pub angle_from_parent_branch: f32, 
-    pub child_scale: f32,              
-    pub base_radius: f32,              
-    pub leaf_radius: f32,              
-    pub branch_height: f32,
+    pub children: u8,
+    pub levels: u8,
+    pub child_translation_factor: f32,
+    pub angle_from_parent_branch: f32,
+    pub child_scale: f32,
+    pub base_radius: f32,
+    pub leaf_radius: f32,
+    /// Adjusts the height of the trunk. Doesn't affect the rest of the tree.
+    pub root_height: f32,
+    /// This is calculatable, but I don't know how. Branches stick through the
+    /// other side of their parent, so this value just offsets that a little.
+    pub branch_correction: f32,
 }
 
 impl Params {
@@ -21,29 +25,20 @@ impl Params {
             root_transform: Transform::default(),
             children: 4,
             levels: 4,
-            child_translation_factor: 1.0,
+            child_translation_factor: 0.8,
             angle_from_parent_branch: 1.0,
-            child_scale: 0.6,
-            base_radius: 0.15,
+            child_scale: 0.5,
+            base_radius: 0.10,
             leaf_radius: 0.6,
-            branch_height: 3.0
+            root_height: 1.0,
+            branch_correction: -0.1,
         }
     }
 }
 
 impl Default for Params {
     fn default() -> Self {
-        Self {
-            root_transform: Transform::default(),
-            children: 4,
-            levels: 4,
-            child_translation_factor: 2.0,
-            angle_from_parent_branch: 0.4,
-            child_scale: 0.6,
-            base_radius: 0.15,
-            leaf_radius: 0.4,
-            branch_height: 2.0,
-        }
+        Self::new_desert_tree()
     }
 }
 
@@ -77,15 +72,15 @@ fn generate_branches(params: &Params, level: u8, parent_idx: usize, all: &mut Ve
 
         let mut child_transform = Transform::IDENTITY;
         child_transform.rotate_local_y(angle_around_root_branch);
-        child_transform = child_transform.with_translation(
-            child_transform.local_z()
-                * (params.base_radius + params.child_scale * 0.5 * angle_from_root_branch.sin())
-                + child_transform.local_y()
-                    * ((translation_along_root - 0.5)
-                        + params.child_scale * 0.5 * angle_from_root_branch.cos()),
-        );
-        child_transform.rotate_local_x(angle_from_root_branch);
+        child_transform.translation += child_transform.local_z()
+            * (params.branch_correction
+                + params.base_radius
+                + params.child_scale * 0.5 * angle_from_root_branch.sin());
+        child_transform.translation += child_transform.local_y()
+            * ((translation_along_root - 0.5)
+                + params.child_scale * 0.5 * angle_from_root_branch.cos());
         child_transform = child_transform.with_scale(Vec3::splat(params.child_scale));
+        child_transform.rotate_local_x(angle_from_root_branch);
 
         let child_idx = all.len();
         all.push(Branch {
@@ -133,12 +128,11 @@ pub fn render_tree(
 
     let leaf_mesh = meshes.add(Sphere::new(params.leaf_radius).mesh().ico(2).unwrap());
     let leaf_material = materials.add(Color::srgb(color_r, color_g, color_b));
-    let branch_mesh = meshes.add(Cylinder::new(params.base_radius, params.branch_height));
+    let branch_mesh = meshes.add(Cylinder::new(params.base_radius, 1.0));
     let branch_material = materials.add(Color::srgb(0.8, 0.7, 0.6));
 
     for branch in &tree {
         if branch.is_leaf {
-            // leaves are spheres
             let entity_id = commands
                 .spawn(PbrBundle {
                     mesh: leaf_mesh.clone(),
@@ -149,15 +143,34 @@ pub fn render_tree(
                 .id();
             entity_parent_indices.push((entity_id, branch.parent));
         } else {
-            // cylinders (tree branches)
-            let entity_id = commands
-                .spawn(PbrBundle {
-                    mesh: branch_mesh.clone(),
-                    transform: branch.transform,
-                    material: branch_material.clone(),
-                    ..default()
-                })
-                .id();
+            let mut transform = branch.transform;
+            let entity_id = if branch.parent.is_none() {
+                transform.translation.y += params.root_height * 0.5;
+                commands
+                    .spawn(SpatialBundle::from_transform(transform))
+                    .with_children(|parent| {
+                        parent.spawn(PbrBundle {
+                            mesh: branch_mesh.clone(),
+                            transform: Transform::default().with_scale(Vec3::new(
+                                1.0,
+                                params.root_height,
+                                1.0,
+                            )),
+                            material: branch_material.clone(),
+                            ..default()
+                        });
+                    })
+                    .id()
+            } else {
+                commands
+                    .spawn(PbrBundle {
+                        mesh: branch_mesh.clone(),
+                        transform,
+                        material: branch_material.clone(),
+                        ..default()
+                    })
+                    .id()
+            };
             entity_parent_indices.push((entity_id, branch.parent));
         }
 

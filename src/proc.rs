@@ -123,12 +123,14 @@ fn setup(
 
     let mut tree_params = Params::new_desert_tree();
     tree_params.root_transform = Transform::from_xyz(0.0, 1.0, 0.0);
+    tree_params.root_height = 2.0;
     render_tree(&mut commands, &mut meshes, &mut materials, &tree_params);
 }
 
 fn draw_gizmos(mut gizmos: Gizmos, query: Query<&ChunkTag>, terrain: Res<TerrainResource>) {
     gizmos.arrow(Vec3::new(0.0, 0.0, 0.0), Vec3::new(20.0, 0.0, 0.0), BLUE);
     gizmos.arrow(Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 20.0), RED_500);
+    gizmos.sphere(Vec3::new(0.0, 1.0, 0.0), Quat::IDENTITY, 1.0, BLUE);
 
     for tag in query.iter() {
         gizmos.rect(
