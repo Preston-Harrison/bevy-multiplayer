@@ -8,7 +8,7 @@ use bevy::{
 use bevy_rapier3d::prelude::*;
 use noise::{NoiseFn, Perlin};
 
-use self::tree::{render_tree, Params, TreeSet};
+use self::tree::{Tree, TreePlugin};
 
 pub mod shaders;
 pub mod tree;
@@ -18,6 +18,7 @@ pub struct TerrainPlugin;
 impl Plugin for TerrainPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Update, tree_spawn_system);
+        app.add_plugins(TreePlugin);
     }
 }
 
@@ -48,7 +49,6 @@ pub struct Terrain {
     radius: i32,
     grid_spacing: usize,
     noise_layers: Vec<NoiseLayer>,
-    tree_set: TreeSet,
     tree_noise: NoiseMap,
     materials: TerrainMaterials<StandardMaterial>,
 }
@@ -62,7 +62,6 @@ impl Terrain {
         chunk_size: usize,
         grid_spacing: usize,
         noise_layers: Vec<NoiseLayer>,
-        tree_set: TreeSet,
         tree_noise: NoiseMap,
         materials: TerrainMaterials<StandardMaterial>,
     ) -> Self {
@@ -73,7 +72,6 @@ impl Terrain {
             noise_layers,
             tree_noise,
             materials,
-            tree_set,
         }
     }
 
@@ -223,11 +221,12 @@ impl Terrain {
                     match get_spawn_origin(context, grid[x][z]) {
                         Some(intersect) => {
                             n += 1;
-                            let mut params = Params::new_desert_tree();
-                            params.root_transform.translation = intersect.point;
-                            let handle = &self.tree_set.handles[0];
-                            let tree = render_tree(commands, &handle, &params);
-                            commands.entity(tree).insert((chunk_tag.clone(), IsTree));
+                            commands.spawn((
+                                IsTree,
+                                Tree::new(),
+                                chunk_tag.clone(),
+                                SpatialBundle::from_transform(Transform::from_translation(intersect.point)),
+                            ));
                         }
                         None => info!("no origin"),
                     }

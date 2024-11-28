@@ -5,18 +5,19 @@ use bevy::color::palettes::tailwind::RED_500;
 use bevy::core_pipeline::prepass::DepthPrepass;
 use bevy::dev_tools::fps_overlay::{FpsOverlayConfig, FpsOverlayPlugin};
 use bevy::input::mouse::MouseMotion;
+use bevy::math::Affine2;
 use bevy::pbr::{MaterialPipeline, MaterialPipelineKey};
 use bevy::prelude::*;
 use bevy::render::mesh::{Mesh, MeshVertexBufferLayoutRef};
 use bevy::render::render_resource::{
     AsBindGroup, RenderPipelineDescriptor, ShaderRef, SpecializedMeshPipelineError,
 };
+use bevy::render::texture::{ImageAddressMode, ImageLoaderSettings, ImageSampler, ImageSamplerDescriptor};
 use bevy::render::view::ColorGrading;
 use bevy::window::{CursorGrabMode, PrimaryWindow};
 use bevy_rapier3d::prelude::*;
 use noise::Perlin;
 
-use crate::shared::proc::tree::{render_tree, Params, TreeSet};
 use crate::shared::proc::{
     ChunkTag, NoiseLayer, NoiseMap, Terrain, TerrainMaterials, TerrainPlugin,
 };
@@ -65,7 +66,6 @@ struct FreeCamera {
 fn setup(
     mut commands: Commands,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut meshes: ResMut<Assets<Mesh>>,
     asset_server: Res<AssetServer>,
 ) {
     let noise_layers = vec![
@@ -85,10 +85,22 @@ fn setup(
             frequency: 0.02,
         },
     ];
+    let dune_texture = asset_server.load_with_settings("sand_dune_texture.png", |s: &mut _| {
+        *s = ImageLoaderSettings {
+            sampler: ImageSampler::Descriptor(ImageSamplerDescriptor {
+                // rewriting mode to repeat image,
+                address_mode_u: ImageAddressMode::Repeat,
+                address_mode_v: ImageAddressMode::Repeat,
+                ..default()
+            }),
+            ..default()
+        }
+    });
     let terrain_materials = TerrainMaterials {
         grass: materials.add(StandardMaterial {
             base_color: LinearRgba::new(1.0, 0.37, 0.1, 1.0).into(),
-            normal_map_texture: Some(asset_server.load("sand_dune_texture.png")),
+            normal_map_texture: Some(dune_texture),
+            uv_transform: Affine2::from_scale(Vec2::new(100.0, 100.0)),
             ..default()
         }),
     };
@@ -96,13 +108,10 @@ fn setup(
         noise: Perlin::new(3),
         frequency: 0.01,
     };
-    let params = Params::new_desert_tree();
-    let tree_set = TreeSet::new(&[params], &mut meshes, &mut materials);
     let terrain = Terrain::new(
         100,
         5,
         noise_layers,
-        tree_set,
         tree_noise,
         terrain_materials,
     );
