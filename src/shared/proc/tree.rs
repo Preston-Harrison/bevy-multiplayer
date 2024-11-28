@@ -24,6 +24,8 @@ struct TreeMeshes {
     fall_blocky: Option<Handle<Scene>>,
 }
 
+/// PERF: This can spawn alot of colliders, which slows the frame rate a little.
+/// Might be worth spawning colliders only while near the player.
 fn spawn_trees(
     mut tree_meshes: ResMut<TreeMeshes>,
     new_trees: Query<Entity, Added<Tree>>,
@@ -41,14 +43,18 @@ fn spawn_trees(
     };
 
     for entity in new_trees.iter() {
-        commands
-            .entity(entity)
-            .insert((RigidBody::Fixed, Collider::cylinder(1.0, 0.05)))
-            .with_children(|parent| {
+        if let Some(mut entity) = commands.get_entity(entity) {
+            entity.with_children(|parent| {
                 parent.spawn(SceneBundle {
                     scene: tree_mesh.clone(),
                     ..Default::default()
                 });
+                parent.spawn((
+                    RigidBody::Fixed,
+                    Collider::cylinder(0.5, 0.05),
+                    SpatialBundle::from_transform(Transform::from_xyz(0.0, 0.5, 0.0)),
+                ));
             });
+        }
     }
 }

@@ -11,7 +11,7 @@ use bevy::window::{CursorGrabMode, PrimaryWindow};
 use bevy_inspector_egui::quick::ResourceInspectorPlugin;
 use bevy_rapier3d::prelude::*;
 
-use crate::shared::proc::{ChunkTag, Terrain, TerrainConfig, TerrainPlugin};
+use crate::shared::proc::{Chunk, Terrain, TerrainConfig, TerrainPlugin};
 
 pub fn run() {
     App::new()
@@ -29,9 +29,9 @@ pub fn run() {
             },
         ))
         .register_type::<TerrainConfig>()
-        .add_plugins(ResourceInspectorPlugin::<TerrainConfig>::default())
         .add_plugins(RapierPhysicsPlugin::<NoUserData>::default())
         // .add_plugins(RapierDebugRenderPlugin::default())
+        // .add_plugins(ResourceInspectorPlugin::<TerrainConfig>::default())
         .add_systems(Startup, setup)
         .add_systems(
             Update,
@@ -107,18 +107,18 @@ fn setup(
         });
 }
 
-fn draw_gizmos(mut gizmos: Gizmos, query: Query<&ChunkTag>, terrain: Res<Terrain>) {
+fn draw_gizmos(mut gizmos: Gizmos, query: Query<&Chunk>, terrain: Res<Terrain>) {
     gizmos.arrow(Vec3::new(0.0, 0.0, 0.0), Vec3::new(20.0, 0.0, 0.0), BLUE);
     gizmos.arrow(Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 20.0), RED_500);
     gizmos.sphere(Vec3::new(0.0, 1.0, 0.0), Quat::IDENTITY, 1.0, BLUE);
 
     for tag in query.iter() {
-        gizmos.rect(
-            terrain.chunk_to_world_position(tag.position, Vec3::ZERO) + terrain.mid_chunk_offset(),
-            Quat::from_rotation_x(PI / 2.0),
-            Vec2::splat(100.0),
-            BLUE,
-        );
+        // gizmos.rect(
+        //     terrain.chunk_to_world_position(tag.position, Vec3::ZERO) + terrain.mid_chunk_offset(),
+        //     Quat::from_rotation_x(PI / 2.0),
+        //     Vec2::splat(100.0),
+        //     BLUE,
+        // );
     }
 }
 
@@ -146,7 +146,7 @@ fn render_chunks(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     terrain: Res<Terrain>,
-    chunks: Query<(Entity, &ChunkTag)>,
+    chunks: Query<(Entity, &Chunk)>,
     keys: Res<ButtonInput<KeyCode>>,
 ) {
     let Ok(player) = player.get_single() else {
