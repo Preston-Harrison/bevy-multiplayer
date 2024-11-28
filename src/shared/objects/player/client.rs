@@ -22,7 +22,10 @@ use crate::{
     shared::{
         console::ConsoleMessage,
         objects::{
-            gizmo::spawn_raycast_visual, grounded::Grounded, LastSyncTracker, NetworkObject,
+            gizmo::spawn_raycast_visual,
+            grounded::Grounded,
+            gun::{Gun, GunType},
+            LastSyncTracker, NetworkObject,
         },
         physics::apply_kinematics,
         GameLogic,
@@ -175,20 +178,24 @@ pub fn spawn_player_camera(mut commands: Commands, players: Query<Entity, Added<
     commands.entity(entity).with_children(|parent| {
         parent.spawn((
             PlayerCameraTarget,
-            TransformBundle::from_transform(Transform::from_xyz(0.0, 0.5, 0.0)),
+            SpatialBundle::from_transform(Transform::from_xyz(0.0, 0.5, 0.0)),
         ));
     });
-    commands.spawn((
-        PlayerCamera,
-        Camera3dBundle {
-            projection: PerspectiveProjection {
-                fov: 60.0_f32.to_radians(),
+    commands
+        .spawn((
+            PlayerCamera,
+            Camera3dBundle {
+                projection: PerspectiveProjection {
+                    fov: 60.0_f32.to_radians(),
+                    ..default()
+                }
+                .into(),
                 ..default()
-            }
-            .into(),
-            ..default()
-        },
-    ));
+            },
+        ))
+        .with_children(|parent| {
+            parent.spawn((SpatialBundle::default(), Gun::new(GunType::PurpleRifle)));
+        });
 }
 
 /// Rotates the player based on mouse movement.

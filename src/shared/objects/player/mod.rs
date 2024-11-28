@@ -13,7 +13,11 @@ use self::{
     server::{LastInputTracker, PlayerServerPlugin},
 };
 
-use super::{grounded::Grounded, LastSyncTracker, NetworkObject};
+use super::{
+    grounded::Grounded,
+    gun::{Gun, GunType},
+    LastSyncTracker, NetworkObject,
+};
 
 pub mod client;
 pub mod server;
@@ -203,7 +207,7 @@ pub fn spawn_player(
         KinematicCharacterController::default(),
         RigidBody::KinematicPositionBased,
         Collider::capsule_y(0.5, 0.25),
-        TransformBundle::from_transform(transform),
+        SpatialBundle::from_transform(transform),
         Grounded::default(),
         net_obj.clone(),
         LoadsChunks,
@@ -212,6 +216,11 @@ pub fn spawn_player(
     match spawn_mode {
         SpawnMode::Server(_) => {
             entity.insert(LastInputTracker::default());
+            entity.with_children(|parent| {
+                parent.spawn(SpatialBundle::from_transform(Transform::from_xyz(0.0, 0.5, 0.0))).with_children(|parent| {
+                    parent.spawn((SpatialBundle::default(), Gun::new(GunType::PurpleRifle)));
+                });
+            });
         }
         SpawnMode::Client(tick) => {
             entity

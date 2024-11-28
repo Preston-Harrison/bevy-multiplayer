@@ -1,5 +1,5 @@
 use bevy::{
-    color::palettes::css::{BLUE, GREEN},
+    color::palettes::css::{BLUE, GREEN, RED},
     prelude::*,
 };
 use bevy_inspector_egui::quick::WorldInspectorPlugin;
@@ -72,17 +72,35 @@ fn setup(
                     Name::new("Game Camera"),
                 ))
                 .with_children(|parent| {
-                    parent.spawn((
-                        SceneBundle {
-                            scene: asset_server.load(
-                                GltfAssetLabel::Scene(0).from_asset("kenney-weapons/blasterD.glb"),
-                            ),
-                            transform: Transform::from_translation(Vec3::new(0.2, -1.2, -0.9))
-                                .with_rotation(Quat::from_euler(EulerRot::XYZ, 0.0, 3.1, 0.0)),
-                            ..default()
-                        },
-                        Name::new("Gun"),
-                    ));
+                    parent
+                        .spawn((
+                            SceneBundle {
+                                scene: asset_server.load(
+                                    GltfAssetLabel::Scene(0)
+                                        .from_asset("kenney-weapons/blasterD.glb"),
+                                ),
+                                transform: Transform::from_translation(Vec3::new(0.2, -1.2, -0.9))
+                                    .with_rotation(Quat::from_euler(EulerRot::XYZ, 0.0, 3.1, 0.0)),
+                                ..default()
+                            },
+                            Name::new("Gun"),
+                        ))
+                        .with_children(|parent| {
+                            parent.spawn((
+                                PbrBundle {
+                                    mesh: meshes.add(Sphere::new(0.02)),
+                                    material: materials.add(StandardMaterial {
+                                        base_color: RED.into(),
+                                        ..Default::default()
+                                    }),
+                                    transform: Transform::from_translation(Vec3::new(
+                                        -0.15, 0.04, 0.28,
+                                    )),
+                                    ..Default::default()
+                                },
+                                Name::new("Bullet Point"),
+                            ));
+                        });
                 });
         });
 
