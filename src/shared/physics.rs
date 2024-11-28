@@ -10,12 +10,17 @@ use super::{
     GameLogic,
 };
 
-pub struct PhysicsPlugin;
+pub struct PhysicsPlugin {
+    pub debug: bool,
+}
 
 impl Plugin for PhysicsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(RapierPhysicsPlugin::<NoUserData>::default())
-            .add_plugins(RapierDebugRenderPlugin::default());
+        // FixedPostUpdate is necessary as game logic runs in FixedUpdate
+        app.add_plugins(RapierPhysicsPlugin::<NoUserData>::default().in_schedule(FixedPostUpdate));
+        if self.debug {
+            app.add_plugins(RapierDebugRenderPlugin::default());
+        }
         app.add_systems(
             FixedUpdate,
             (apply_kinematics_system.in_set(GameLogic::Kinematics),),

@@ -1,4 +1,7 @@
+use std::f32::consts::PI;
+
 use bevy::{
+    color::palettes::css::BLUE,
     math::Affine2,
     prelude::*,
     render::{
@@ -6,32 +9,41 @@ use bevy::{
         render_asset::RenderAssetUsages,
         texture::{ImageAddressMode, ImageLoaderSettings, ImageSampler, ImageSamplerDescriptor},
     },
+    utils::HashSet,
 };
 use bevy_inspector_egui::InspectorOptions;
 use bevy_rapier3d::prelude::*;
 use noise::{NoiseFn, Perlin};
+use rock::{Rock, RockPlugin};
 
 use self::tree::{Tree, TreePlugin};
 
 pub mod shaders;
 pub mod tree;
+pub mod rock;
 
-pub struct TerrainPlugin;
+pub struct TerrainPlugin {
+    pub is_server: bool,
+}
 
 impl Plugin for TerrainPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, tree_spawn_system);
-        app.add_plugins(TreePlugin);
+        app.add_systems(FixedUpdate, (chunk_load_system, tree_spawn_system));
+        app.add_plugins((TreePlugin, RockPlugin));
     }
 }
 
 /// Describes a chunk parent entity. Everything local to the chunk (floor, trees,
 /// but not entities that can walk across chunks) is a child of this.
-#[derive(Component, Clone)]
+#[derive(Component, Clone, Debug)]
 pub struct Chunk {
     pub position: IVec2,
+    /// Level of Detail. This is only useful for rendering on the client.
+    /// This is always 1 on the server. 1 means there is no loss in detail.
     pub lod: usize,
 }
+
+const SERVER_LOD: usize = 1;
 
 #[derive(Reflect, Resource, Default, InspectorOptions)]
 #[reflect(Resource)]
@@ -58,6 +70,7 @@ struct NoiseMap {
 #[derive(Resource)]
 pub struct Terrain {
     chunk_size: usize,
+    /// The radius around the player(s) to generate chunks.
     radius: i32,
     grid_spacing: usize,
     noise_layers: Vec<NoiseLayer>,
@@ -117,13 +130,22 @@ impl Terrain {
         };
         Self {
             chunk_size: 100,
-            radius: 5,
+            radius: 1,
             grid_spacing: 5,
             noise_layers,
             tree_noise,
             tree_spawn_threshold: 0.4,
             materials: terrain_materials,
         }
+    }
+
+    pub fn draw_chunk_gizmo(&self, gizmos: &mut Gizmos, chunk_pos: IVec2) {
+        gizmos.rect(
+            self.chunk_to_world_position(chunk_pos, Vec3::ZERO) + self.mid_chunk_offset(),
+            Quat::from_rotation_x(PI / 2.0),
+            Vec2::splat(100.0),
+            BLUE,
+        );
     }
 
     pub fn update_config(&mut self, config: &TerrainConfig) {
@@ -165,6 +187,8 @@ impl Terrain {
         (world_x, world_z)
     }
 
+    /// Returns an offset to move from an output of `chunk_to_world_position` to
+    /// the center of the chunk. Y is set to zero.
     pub fn mid_chunk_offset(&self) -> Vec3 {
         Vec3::new(self.chunk_size as f32, 0.0, self.chunk_size as f32) / 2.0
     }
@@ -230,7 +254,7 @@ impl Terrain {
                 // Compute UV coordinates
                 let u = x_pos / (self.chunk_size as f32);
                 let v = z_pos / (self.chunk_size as f32);
-                uvs.push([u, v]); // Add this line
+                uvs.push([u, v]);
             }
         }
 
@@ -270,7 +294,7 @@ impl Terrain {
     /// This requires the colldier mesh to already exist so the floor position
     /// can be found.
     /// TODO: have floor filter so raycasts only hit the floor.
-    fn spawn_trees(
+    fn spawn_trees_and_rocks(
         &self,
         commands: &mut Commands,
         context: &RapierContext,
@@ -290,18 +314,26 @@ impl Terrain {
                 let noise = self.tree_noise.noise.get([sample_x, sample_z]);
                 if noise > self.tree_spawn_threshold {
                     // Spawn tree here.
-                    // TODO: better algo for declustering
+                    // TODO: better algo than random in grid.
                     match get_spawn_origin(context, grid[x][z]) {
                         Some(intersect) => {
-                            info!("spawning tree");
                             commands.entity(chunk_entity).with_children(|parent| {
                                 let local_position = intersect.point - chunk_world_position;
-                                parent.spawn((
-                                    Tree::new(),
-                                    SpatialBundle::from_transform(Transform::from_translation(
-                                        local_position,
-                                    )),
-                                ));
+                                if x % 2 == 0 {
+                                    parent.spawn((
+                                        Tree::new(),
+                                        SpatialBundle::from_transform(Transform::from_translation(
+                                            local_position,
+                                        )),
+                                    ));
+                                } else {
+                                    parent.spawn((
+                                        Rock::new(),
+                                        SpatialBundle::from_transform(Transform::from_translation(
+                                            local_position,
+                                        )),
+                                    ));
+                                };
                             });
                         }
                         None => info!("no origin"),
@@ -319,7 +351,6 @@ impl Terrain {
         commands: &mut Commands,
         meshes: &mut ResMut<Assets<Mesh>>,
     ) {
-        info!("chunk being rendered");
         let mesh = self.generate_mesh(chunk.position, chunk.lod);
         let collider = Collider::from_bevy_mesh(&mesh, &ComputedColliderShape::TriMesh)
             .expect("collider to be constructed");
@@ -338,70 +369,19 @@ impl Terrain {
         });
     }
 
-    pub fn reload_chunks(
-        &self,
-        old: Option<IVec2>,
-        new: Option<IVec2>,
-        commands: &mut Commands,
-        query: &Query<(Entity, &Chunk)>,
-        meshes: &mut ResMut<Assets<Mesh>>,
-    ) {
-        let old_chunks = match old {
-            Some(old) => generate_chunks_around(old, self.radius),
-            None => vec![],
-        };
-        let new_chunks = match new {
-            Some(new) => generate_chunks_around(new, self.radius),
-            None => vec![],
-        };
-        if old_chunks.len() == 0 && new_chunks.len() == 0 {
-            return;
-        }
-        let old_chunks: Vec<(IVec2, usize)> = old_chunks
-            .into_iter()
-            .map(|(chunk, distance)| (chunk, distance_to_lod(distance)))
-            .collect();
-        let new_chunks: Vec<(IVec2, usize)> = new_chunks
-            .into_iter()
-            .map(|(chunk, distance)| (chunk, distance_to_lod(distance)))
-            .collect();
-        let mut despawn = vec![];
-        let mut spawn = vec![];
+    /// Creates a chunk parent entity and returns it's entity ID.
+    fn create_chunk(&self, chunk: &Chunk, commands: &mut Commands) -> Entity {
+        let world_pos = self.chunk_to_world_position(chunk.position, Vec3::ZERO);
+        let spatial = SpatialBundle::from_transform(Transform::from_translation(world_pos));
+        commands.spawn((chunk.clone(), spatial)).id()
+    }
 
-        for new_chunk in new_chunks.iter() {
-            if !old_chunks.contains(new_chunk) {
-                spawn.push(new_chunk);
-            }
-        }
-        for old_chunk in old_chunks.iter() {
-            if !new_chunks.contains(old_chunk) {
-                despawn.push(old_chunk);
-            }
-        }
-
-        for (entity, chunk) in query.iter() {
-            if despawn.iter().any(|v| v.0 == chunk.position) {
-                commands.entity(entity).despawn_recursive();
-            }
-        }
-
-        for (position, lod) in spawn {
-            let chunk = Chunk {
-                position: *position,
-                lod: *lod,
-            };
-            let world_pos = self.chunk_to_world_position(*position, Vec3::ZERO);
-            let entity = commands
-                .spawn((
-                    chunk.clone(),
-                    SpatialBundle::from_transform(Transform::from_translation(world_pos)),
-                ))
-                .id();
-            self.render_chunk(&chunk, entity, commands, meshes);
-        }
+    fn unload_chunk(&self, chunk_entity: Entity, commands: &mut Commands) {
+        commands.entity(chunk_entity).despawn_recursive();
     }
 }
 
+/// Includes center position with distance = 0. Returns Vec<(position, distance)>.
 fn generate_chunks_around(position: IVec2, radius: i32) -> Vec<(IVec2, i32)> {
     let mut result = Vec::new();
 
@@ -421,16 +401,6 @@ fn generate_chunks_around(position: IVec2, radius: i32) -> Vec<(IVec2, i32)> {
     result
 }
 
-fn distance_to_lod(distance: i32) -> usize {
-    if distance <= 1 {
-        return 1;
-    }
-    if distance <= 6 {
-        return 2;
-    }
-    return 4;
-}
-
 fn get_spawn_origin(context: &RapierContext, position: Vec2) -> Option<RayIntersection> {
     let start = Vec3::new(position.x, 100.0, position.y);
     context
@@ -438,6 +408,7 @@ fn get_spawn_origin(context: &RapierContext, position: Vec2) -> Option<RayInters
         .map(|v| v.1)
 }
 
+/// Spawns trees in newly generated chunks.
 pub fn tree_spawn_system(
     mut commands: Commands,
     context: Res<RapierContext>,
@@ -448,6 +419,57 @@ pub fn tree_spawn_system(
         return;
     };
     for (entity, chunk) in chunks.iter() {
-        terrain.spawn_trees(&mut commands, &context, chunk, entity);
+        trace!("spawning trees for {:?}", chunk);
+        terrain.spawn_trees_and_rocks(&mut commands, &context, chunk, entity);
+    }
+}
+
+#[derive(Component)]
+pub struct LoadsChunks;
+
+/// Loads and unloads chunks based on if an entity with `LoadsChunks` exists
+/// there. Does this for all chunks nearby.
+///
+/// On clients, LoadsChunks should only be present on the client's player.
+/// On the server, it should be on all players.
+pub fn chunk_load_system(
+    loaders: Query<&Transform, With<LoadsChunks>>,
+    chunks: Query<(Entity, &Chunk)>,
+    mut commands: Commands,
+    terrain: Option<Res<Terrain>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+) {
+    let Some(terrain) = terrain else {
+        return;
+    };
+
+    let mut chunks_with_loaders: HashSet<IVec2> = HashSet::new();
+    for transform in loaders.iter() {
+        let chunk = terrain.world_position_to_chunk(transform.translation);
+        let loaded_chunks = generate_chunks_around(chunk, terrain.radius)
+            .into_iter()
+            .map(|(pos, _)| pos);
+        chunks_with_loaders.extend(loaded_chunks);
+    }
+
+    let mut loaded_chunks: HashSet<IVec2> = HashSet::new();
+    for (entity, chunk) in chunks.iter() {
+        if chunks_with_loaders.contains(&chunk.position) {
+            loaded_chunks.insert(chunk.position);
+        } else {
+            terrain.unload_chunk(entity, &mut commands);
+        }
+    }
+
+    let chunks_to_load = chunks_with_loaders.difference(&loaded_chunks);
+    for chunk_pos in chunks_to_load {
+        let chunk = Chunk {
+            position: *chunk_pos,
+            // TODO: add different level of detail on clients.
+            lod: SERVER_LOD,
+        };
+        let entity = terrain.create_chunk(&chunk, &mut commands);
+        terrain.render_chunk(&chunk, entity, &mut commands, &mut meshes);
+        trace!("rendered chunk {:?}", chunk);
     }
 }

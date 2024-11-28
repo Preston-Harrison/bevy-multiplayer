@@ -2,22 +2,19 @@ use std::f32::consts::PI;
 
 use bevy::color::palettes::css::BLUE;
 use bevy::color::palettes::tailwind::RED_500;
-use bevy::core_pipeline::prepass::DepthPrepass;
 use bevy::dev_tools::fps_overlay::{FpsOverlayConfig, FpsOverlayPlugin};
 use bevy::input::mouse::MouseMotion;
 use bevy::prelude::*;
-use bevy::render::mesh::Mesh;
 use bevy::window::{CursorGrabMode, PrimaryWindow};
-use bevy_inspector_egui::quick::ResourceInspectorPlugin;
 use bevy_rapier3d::prelude::*;
 
-use crate::shared::proc::{Chunk, Terrain, TerrainConfig, TerrainPlugin};
+use crate::shared::proc::{Chunk, LoadsChunks, Terrain, TerrainConfig, TerrainPlugin};
 
 pub fn run() {
     App::new()
         .add_plugins((
             DefaultPlugins,
-            TerrainPlugin,
+            TerrainPlugin { is_server: false },
             FpsOverlayPlugin {
                 config: FpsOverlayConfig {
                     text_config: TextStyle {
@@ -29,9 +26,8 @@ pub fn run() {
             },
         ))
         .register_type::<TerrainConfig>()
-        .add_plugins(RapierPhysicsPlugin::<NoUserData>::default())
-        // .add_plugins(RapierDebugRenderPlugin::default())
-        // .add_plugins(ResourceInspectorPlugin::<TerrainConfig>::default())
+        // FixedPostUpdate is necessary as game logic runs in FixedUpdate
+        .add_plugins(RapierPhysicsPlugin::<NoUserData>::default().in_schedule(FixedPostUpdate))
         .add_systems(Startup, setup)
         .add_systems(
             Update,
@@ -40,7 +36,6 @@ pub fn run() {
                 mouse_look,
                 toggle_cursor_grab,
                 draw_gizmos,
-                render_chunks,
                 sync_terrain_config,
             ),
         )
@@ -97,7 +92,7 @@ fn setup(
                 speed: 100.0,
                 walk_speed: 10.0,
             },
-            DepthPrepass,
+            LoadsChunks,
         ))
         .insert(RigidBody::KinematicPositionBased)
         .insert(Collider::ball(0.5))
@@ -113,12 +108,7 @@ fn draw_gizmos(mut gizmos: Gizmos, query: Query<&Chunk>, terrain: Res<Terrain>) 
     gizmos.sphere(Vec3::new(0.0, 1.0, 0.0), Quat::IDENTITY, 1.0, BLUE);
 
     for tag in query.iter() {
-        // gizmos.rect(
-        //     terrain.chunk_to_world_position(tag.position, Vec3::ZERO) + terrain.mid_chunk_offset(),
-        //     Quat::from_rotation_x(PI / 2.0),
-        //     Vec2::splat(100.0),
-        //     BLUE,
-        // );
+        terrain.draw_chunk_gizmo(&mut gizmos, tag.position);
     }
 }
 
@@ -134,42 +124,6 @@ fn toggle_cursor_grab(
         } else {
             CursorGrabMode::Locked
         };
-    }
-}
-
-#[derive(Default)]
-struct ActiveChunk(Option<IVec2>);
-
-fn render_chunks(
-    mut active: Local<ActiveChunk>,
-    player: Query<&Transform, With<FreeCamera>>,
-    mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    terrain: Res<Terrain>,
-    chunks: Query<(Entity, &Chunk)>,
-    keys: Res<ButtonInput<KeyCode>>,
-) {
-    let Ok(player) = player.get_single() else {
-        warn!("no player");
-        return;
-    };
-
-    let position = terrain.world_position_to_chunk(player.translation);
-    if keys.just_pressed(KeyCode::KeyR) {
-        terrain.reload_chunks(active.0, None, &mut commands, &chunks, &mut meshes);
-        terrain.reload_chunks(None, Some(position), &mut commands, &chunks, &mut meshes);
-    } else {
-        if Some(position) != active.0 {
-            info!("reloading chunks");
-            terrain.reload_chunks(
-                active.0,
-                Some(position),
-                &mut commands,
-                &chunks,
-                &mut meshes,
-            );
-            active.0 = Some(position);
-        }
     }
 }
 

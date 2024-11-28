@@ -84,7 +84,7 @@ impl Plugin for Game {
             PlayerPlugin {
                 is_server: self.is_server,
             },
-            PhysicsPlugin,
+            PhysicsPlugin { debug: true },
             GizmoPlugin,
             ConsolePlugin,
             GroundedPlugin,
