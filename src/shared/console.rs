@@ -26,11 +26,6 @@ impl ConsoleMessage {
             color: WHITE.into(),
         }
     }
-
-    pub fn color(mut self, color: impl Into<Color>) -> Self {
-        self.color = color.into();
-        return self;
-    }
 }
 
 #[derive(Component)]

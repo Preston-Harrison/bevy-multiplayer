@@ -5,26 +5,13 @@ use bevy::color::palettes::tailwind::RED_500;
 use bevy::core_pipeline::prepass::DepthPrepass;
 use bevy::dev_tools::fps_overlay::{FpsOverlayConfig, FpsOverlayPlugin};
 use bevy::input::mouse::MouseMotion;
-use bevy::math::Affine2;
-use bevy::pbr::{MaterialPipeline, MaterialPipelineKey};
 use bevy::prelude::*;
-use bevy::render::mesh::{Mesh, MeshVertexBufferLayoutRef};
-use bevy::render::render_resource::{
-    AsBindGroup, RenderPipelineDescriptor, ShaderRef, SpecializedMeshPipelineError,
-};
-use bevy::render::texture::{
-    ImageAddressMode, ImageLoaderSettings, ImageSampler, ImageSamplerDescriptor,
-};
-use bevy::render::view::ColorGrading;
+use bevy::render::mesh::Mesh;
 use bevy::window::{CursorGrabMode, PrimaryWindow};
-use bevy_inspector_egui::prelude::*;
 use bevy_inspector_egui::quick::ResourceInspectorPlugin;
 use bevy_rapier3d::prelude::*;
-use noise::Perlin;
 
-use crate::shared::proc::{
-    ChunkTag, NoiseLayer, NoiseMap, Terrain, TerrainConfig, TerrainMaterials, TerrainPlugin,
-};
+use crate::shared::proc::{ChunkTag, Terrain, TerrainConfig, TerrainPlugin};
 
 pub fn run() {
     App::new()
@@ -71,53 +58,13 @@ fn setup(
     mut materials: ResMut<Assets<StandardMaterial>>,
     asset_server: Res<AssetServer>,
 ) {
-    let noise_layers = vec![
-        NoiseLayer {
-            noise: Perlin::new(0),
-            amplitude: 15.0,
-            frequency: 0.005,
-        },
-        NoiseLayer {
-            noise: Perlin::new(1),
-            amplitude: 5.0,
-            frequency: 0.01,
-        },
-        NoiseLayer {
-            noise: Perlin::new(2),
-            amplitude: 0.5,
-            frequency: 0.02,
-        },
-    ];
     commands.insert_resource(TerrainConfig {
         terrain_frequency: vec![0.005, 0.01, 0.02],
         terrain_amplitude: vec![15.0, 5.0, 0.5],
         tree_frequency: 0.05,
         tree_spawn_threshold: 0.3,
     });
-    let dune_texture = asset_server.load_with_settings("sand_dune_texture.png", |s: &mut _| {
-        *s = ImageLoaderSettings {
-            sampler: ImageSampler::Descriptor(ImageSamplerDescriptor {
-                // rewriting mode to repeat image,
-                address_mode_u: ImageAddressMode::Repeat,
-                address_mode_v: ImageAddressMode::Repeat,
-                ..default()
-            }),
-            ..default()
-        }
-    });
-    let terrain_materials = TerrainMaterials {
-        grass: materials.add(StandardMaterial {
-            base_color: LinearRgba::new(1.0, 0.37, 0.1, 1.0).into(),
-            normal_map_texture: Some(dune_texture),
-            uv_transform: Affine2::from_scale(Vec2::new(100.0, 100.0)),
-            ..default()
-        }),
-    };
-    let tree_noise = NoiseMap {
-        noise: Perlin::new(3),
-        frequency: 0.01,
-    };
-    let terrain = Terrain::new(100, 5, noise_layers, tree_noise, terrain_materials);
+    let terrain = Terrain::new_desert(&asset_server, &mut materials);
     commands.insert_resource(terrain);
 
     commands.spawn(DirectionalLightBundle {
@@ -135,8 +82,6 @@ fn setup(
     });
 
     // Add a free camera
-    let mut color_grading = ColorGrading::default();
-    color_grading.global.tint = -1.0;
     commands
         .spawn((
             Camera3dBundle {
@@ -146,7 +91,6 @@ fn setup(
                     clear_color: ClearColorConfig::Custom(Color::srgb(0.3, 0.76, 1.0)),
                     ..default()
                 },
-                color_grading,
                 ..default()
             },
             FreeCamera {

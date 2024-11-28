@@ -1,8 +1,10 @@
 use bevy::{
+    math::Affine2,
     prelude::*,
     render::{
         mesh::{Indices, PrimitiveTopology},
         render_asset::RenderAssetUsages,
+        texture::{ImageAddressMode, ImageLoaderSettings, ImageSampler, ImageSamplerDescriptor},
     },
 };
 use bevy_inspector_egui::InspectorOptions;
@@ -62,29 +64,66 @@ pub struct Terrain {
     noise_layers: Vec<NoiseLayer>,
     tree_noise: NoiseMap,
     tree_spawn_threshold: f64,
-    materials: TerrainMaterials<StandardMaterial>,
+    materials: TerrainMaterials,
 }
 
-pub struct TerrainMaterials<G: Material> {
-    pub grass: Handle<G>,
+pub struct TerrainMaterials {
+    pub grass: Handle<StandardMaterial>,
 }
 
 impl Terrain {
-    pub fn new(
-        chunk_size: usize,
-        grid_spacing: usize,
-        noise_layers: Vec<NoiseLayer>,
-        tree_noise: NoiseMap,
-        materials: TerrainMaterials<StandardMaterial>,
+    pub fn new_desert(
+        asset_server: &AssetServer,
+        materials: &mut Assets<StandardMaterial>,
     ) -> Self {
+        let noise_layers = vec![
+            NoiseLayer {
+                noise: Perlin::new(0),
+                amplitude: 15.0,
+                frequency: 0.005,
+            },
+            NoiseLayer {
+                noise: Perlin::new(1),
+                amplitude: 5.0,
+                frequency: 0.01,
+            },
+            NoiseLayer {
+                noise: Perlin::new(2),
+                amplitude: 0.5,
+                frequency: 0.02,
+            },
+        ];
+        let dune_texture = asset_server.load_with_settings("sand_dune_texture.png", |s: &mut _| {
+            *s = ImageLoaderSettings {
+                sampler: ImageSampler::Descriptor(ImageSamplerDescriptor {
+                    // rewriting mode to repeat image,
+                    address_mode_u: ImageAddressMode::Repeat,
+                    address_mode_v: ImageAddressMode::Repeat,
+                    ..default()
+                }),
+                ..default()
+            }
+        });
+        let terrain_materials = TerrainMaterials {
+            grass: materials.add(StandardMaterial {
+                base_color: LinearRgba::new(1.0, 0.37, 0.1, 1.0).into(),
+                normal_map_texture: Some(dune_texture),
+                uv_transform: Affine2::from_scale(Vec2::new(100.0, 100.0)),
+                ..default()
+            }),
+        };
+        let tree_noise = NoiseMap {
+            noise: Perlin::new(3),
+            frequency: 0.01,
+        };
         Self {
-            chunk_size,
-            radius: 10,
-            grid_spacing,
+            chunk_size: 100,
+            radius: 5,
+            grid_spacing: 5,
             noise_layers,
             tree_noise,
-            materials,
             tree_spawn_threshold: 0.4,
+            materials: terrain_materials,
         }
     }
 

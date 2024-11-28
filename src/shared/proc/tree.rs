@@ -41,14 +41,14 @@ fn spawn_trees(
     };
 
     for entity in new_trees.iter() {
-        commands.entity(entity).insert((
-            RigidBody::Fixed,
-            Collider::cylinder(1.0, 0.05),
-        )).with_children(|parent| {
-            parent.spawn(SceneBundle {
-                scene: tree_mesh.clone(),
-                ..Default::default()
+        commands
+            .entity(entity)
+            .insert((RigidBody::Fixed, Collider::cylinder(1.0, 0.05)))
+            .with_children(|parent| {
+                parent.spawn(SceneBundle {
+                    scene: tree_mesh.clone(),
+                    ..Default::default()
+                });
             });
-        });
     }
 }
