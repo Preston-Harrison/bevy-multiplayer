@@ -12,14 +12,18 @@ use bevy::render::mesh::{Mesh, MeshVertexBufferLayoutRef};
 use bevy::render::render_resource::{
     AsBindGroup, RenderPipelineDescriptor, ShaderRef, SpecializedMeshPipelineError,
 };
-use bevy::render::texture::{ImageAddressMode, ImageLoaderSettings, ImageSampler, ImageSamplerDescriptor};
+use bevy::render::texture::{
+    ImageAddressMode, ImageLoaderSettings, ImageSampler, ImageSamplerDescriptor,
+};
 use bevy::render::view::ColorGrading;
 use bevy::window::{CursorGrabMode, PrimaryWindow};
+use bevy_inspector_egui::prelude::*;
+use bevy_inspector_egui::quick::ResourceInspectorPlugin;
 use bevy_rapier3d::prelude::*;
 use noise::Perlin;
 
 use crate::shared::proc::{
-    ChunkTag, NoiseLayer, NoiseMap, Terrain, TerrainMaterials, TerrainPlugin,
+    ChunkTag, NoiseLayer, NoiseMap, Terrain, TerrainConfig, TerrainMaterials, TerrainPlugin,
 };
 
 pub fn run() {
@@ -30,16 +34,15 @@ pub fn run() {
             FpsOverlayPlugin {
                 config: FpsOverlayConfig {
                     text_config: TextStyle {
-                        // Here we define size of our overlay
-                        font_size: 50.0,
-                        // We can also change color of the overlay
+                        font_size: 20.0,
                         color: Color::srgb(0.0, 1.0, 0.0),
-                        // If we want, we can use a custom font
                         font: default(),
                     },
                 },
             },
         ))
+        .register_type::<TerrainConfig>()
+        .add_plugins(ResourceInspectorPlugin::<TerrainConfig>::default())
         .add_plugins(RapierPhysicsPlugin::<NoUserData>::default())
         // .add_plugins(RapierDebugRenderPlugin::default())
         .add_systems(Startup, setup)
@@ -48,10 +51,10 @@ pub fn run() {
             (
                 free_camera_movement,
                 mouse_look,
-                cursor_grab,
                 toggle_cursor_grab,
                 draw_gizmos,
                 render_chunks,
+                sync_terrain_config,
             ),
         )
         .run();
@@ -85,6 +88,12 @@ fn setup(
             frequency: 0.02,
         },
     ];
+    commands.insert_resource(TerrainConfig {
+        terrain_frequency: vec![0.005, 0.01, 0.02],
+        terrain_amplitude: vec![15.0, 5.0, 0.5],
+        tree_frequency: 0.05,
+        tree_spawn_threshold: 0.3,
+    });
     let dune_texture = asset_server.load_with_settings("sand_dune_texture.png", |s: &mut _| {
         *s = ImageLoaderSettings {
             sampler: ImageSampler::Descriptor(ImageSamplerDescriptor {
@@ -108,13 +117,7 @@ fn setup(
         noise: Perlin::new(3),
         frequency: 0.01,
     };
-    let terrain = Terrain::new(
-        100,
-        5,
-        noise_layers,
-        tree_noise,
-        terrain_materials,
-    );
+    let terrain = Terrain::new(100, 5, noise_layers, tree_noise, terrain_materials);
     commands.insert_resource(terrain);
 
     commands.spawn(DirectionalLightBundle {
@@ -148,7 +151,7 @@ fn setup(
             },
             FreeCamera {
                 speed: 100.0,
-                walk_speed: 30.0,
+                walk_speed: 10.0,
             },
             DepthPrepass,
         ))
@@ -175,49 +178,18 @@ fn draw_gizmos(mut gizmos: Gizmos, query: Query<&ChunkTag>, terrain: Res<Terrain
     }
 }
 
-fn cursor_grab(
-    buttons: Res<ButtonInput<MouseButton>>,
-    mut q_windows: Query<&mut Window, With<PrimaryWindow>>,
-) {
-    if buttons.just_pressed(MouseButton::Left) {
-        let mut primary_window = q_windows.single_mut();
-        primary_window.cursor.grab_mode = CursorGrabMode::Locked;
-        primary_window.cursor.visible = false;
-    }
-}
-
 fn toggle_cursor_grab(
     keys: Res<ButtonInput<KeyCode>>,
     mut q_windows: Query<&mut Window, With<PrimaryWindow>>,
 ) {
     if keys.just_pressed(KeyCode::Escape) {
         let mut primary_window = q_windows.single_mut();
-
-        primary_window.cursor.grab_mode = CursorGrabMode::None;
-        primary_window.cursor.visible = true;
-    }
-}
-
-#[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
-struct Water {}
-
-impl Material for Water {
-    fn fragment_shader() -> ShaderRef {
-        "shaders/water.wgsl".into()
-    }
-
-    fn alpha_mode(&self) -> AlphaMode {
-        AlphaMode::Blend
-    }
-
-    fn specialize(
-        _pipeline: &MaterialPipeline<Self>,
-        descriptor: &mut RenderPipelineDescriptor,
-        _layout: &MeshVertexBufferLayoutRef,
-        _key: MaterialPipelineKey<Self>,
-    ) -> Result<(), SpecializedMeshPipelineError> {
-        descriptor.primitive.cull_mode = None;
-        Ok(())
+        primary_window.cursor.visible = !primary_window.cursor.visible;
+        primary_window.cursor.grab_mode = if primary_window.cursor.visible {
+            CursorGrabMode::None
+        } else {
+            CursorGrabMode::Locked
+        };
     }
 }
 
@@ -231,6 +203,7 @@ fn render_chunks(
     mut meshes: ResMut<Assets<Mesh>>,
     terrain: Res<Terrain>,
     chunks: Query<(Entity, &ChunkTag)>,
+    keys: Res<ButtonInput<KeyCode>>,
 ) {
     let Ok(player) = player.get_single() else {
         warn!("no player");
@@ -238,10 +211,21 @@ fn render_chunks(
     };
 
     let position = terrain.world_position_to_chunk(player.translation);
-    if Some(position) != active.0 {
-        info!("reloading chunks");
-        terrain.reload_chunks(active.0, position, &mut commands, &chunks, &mut meshes);
-        active.0 = Some(position);
+    if keys.just_pressed(KeyCode::KeyR) {
+        terrain.reload_chunks(active.0, None, &mut commands, &chunks, &mut meshes);
+        terrain.reload_chunks(None, Some(position), &mut commands, &chunks, &mut meshes);
+    } else {
+        if Some(position) != active.0 {
+            info!("reloading chunks");
+            terrain.reload_chunks(
+                active.0,
+                Some(position),
+                &mut commands,
+                &chunks,
+                &mut meshes,
+            );
+            active.0 = Some(position);
+        }
     }
 }
 
@@ -321,4 +305,11 @@ fn mouse_look(
         camera.rotate_y(yaw);
         camera.rotate_local_x(pitch);
     }
+}
+
+fn sync_terrain_config(mut terrain: ResMut<Terrain>, config: Option<Res<TerrainConfig>>) {
+    let Some(config) = config else {
+        return;
+    };
+    terrain.update_config(&config);
 }

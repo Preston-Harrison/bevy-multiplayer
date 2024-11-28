@@ -5,6 +5,7 @@ use bevy::{
         render_asset::RenderAssetUsages,
     },
 };
+use bevy_inspector_egui::InspectorOptions;
 use bevy_rapier3d::prelude::*;
 use noise::{NoiseFn, Perlin};
 
@@ -31,6 +32,16 @@ pub struct ChunkTag {
 #[derive(Component)]
 pub struct IsTree;
 
+#[derive(Reflect, Resource, Default, InspectorOptions)]
+#[reflect(Resource)]
+pub struct TerrainConfig {
+    pub terrain_frequency: Vec<f64>,
+    pub terrain_amplitude: Vec<f64>,
+
+    pub tree_frequency: f64,
+    pub tree_spawn_threshold: f64,
+}
+
 pub struct NoiseLayer {
     pub noise: Perlin,
     pub amplitude: f64,
@@ -50,6 +61,7 @@ pub struct Terrain {
     grid_spacing: usize,
     noise_layers: Vec<NoiseLayer>,
     tree_noise: NoiseMap,
+    tree_spawn_threshold: f64,
     materials: TerrainMaterials<StandardMaterial>,
 }
 
@@ -72,7 +84,23 @@ impl Terrain {
             noise_layers,
             tree_noise,
             materials,
+            tree_spawn_threshold: 0.4,
         }
+    }
+
+    pub fn update_config(&mut self, config: &TerrainConfig) {
+        for (ix, freq) in config.terrain_frequency.iter().enumerate() {
+            if let Some(layer) = self.noise_layers.get_mut(ix) {
+                layer.frequency = *freq;
+            }
+        }
+        for (ix, freq) in config.terrain_amplitude.iter().enumerate() {
+            if let Some(layer) = self.noise_layers.get_mut(ix) {
+                layer.amplitude = *freq;
+            }
+        }
+        self.tree_noise.frequency = config.tree_frequency;
+        self.tree_spawn_threshold = config.tree_spawn_threshold;
     }
 
     pub fn world_position_to_chunk(&self, position: Vec3) -> IVec2 {
@@ -205,27 +233,28 @@ impl Terrain {
     /// can be found.
     /// TODO: have floor filter so raycasts only hit the floor.
     fn spawn_trees(&self, commands: &mut Commands, context: &RapierContext, chunk_tag: &ChunkTag) {
-        if chunk_tag.lod > 1 {
+        if chunk_tag.lod > 2 {
             return;
         }
-        let mut n = 0;
         let (grid, x_num, z_num) = self.generate_grid_points(chunk_tag.position, chunk_tag.lod);
         for x in 0..x_num {
             for z in 0..z_num {
-                let sample_x = x as f64 * self.tree_noise.frequency;
-                let sample_z = z as f64 * self.tree_noise.frequency;
+                let sample_pos = grid[x][z];
+                let sample_x = sample_pos.x as f64 * self.tree_noise.frequency;
+                let sample_z = sample_pos.y as f64 * self.tree_noise.frequency;
                 let noise = self.tree_noise.noise.get([sample_x, sample_z]);
-                if noise > 0.4 && n < 10 {
+                if noise > self.tree_spawn_threshold {
                     // Spawn tree here.
                     // TODO: better algo for declustering
                     match get_spawn_origin(context, grid[x][z]) {
                         Some(intersect) => {
-                            n += 1;
                             commands.spawn((
                                 IsTree,
                                 Tree::new(),
                                 chunk_tag.clone(),
-                                SpatialBundle::from_transform(Transform::from_translation(intersect.point)),
+                                SpatialBundle::from_transform(Transform::from_translation(
+                                    intersect.point,
+                                )),
                             ));
                         }
                         None => info!("no origin"),
@@ -269,7 +298,7 @@ impl Terrain {
     pub fn reload_chunks(
         &self,
         old: Option<IVec2>,
-        new: IVec2,
+        new: Option<IVec2>,
         commands: &mut Commands,
         query: &Query<(Entity, &ChunkTag)>,
         meshes: &mut ResMut<Assets<Mesh>>,
@@ -278,7 +307,13 @@ impl Terrain {
             Some(old) => generate_chunks_around(old, self.radius),
             None => vec![],
         };
-        let new_chunks = generate_chunks_around(new, self.radius);
+        let new_chunks = match new {
+            Some(new) => generate_chunks_around(new, self.radius),
+            None => vec![],
+        };
+        if old_chunks.len() == 0 && new_chunks.len() == 0 {
+            return;
+        }
         let old_chunks: Vec<(IVec2, usize)> = old_chunks
             .into_iter()
             .map(|(chunk, distance)| (chunk, distance_to_lod(distance)))
