@@ -4,7 +4,9 @@ use bevy::prelude::*;
 use bevy_rapier3d::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::shared::{physics::char_ctrl_to_move_opts, tick::Tick, GameLogic, SpawnMode};
+use crate::shared::{
+    physics::char_ctrl_to_move_opts, proc::LoadsChunks, tick::Tick, GameLogic, SpawnMode,
+};
 
 use self::{
     client::PlayerClientPlugin,
@@ -204,6 +206,7 @@ pub fn spawn_player(
         TransformBundle::from_transform(transform),
         Grounded::default(),
         net_obj.clone(),
+        LoadsChunks,
     ));
 
     match spawn_mode {

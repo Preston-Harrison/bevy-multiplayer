@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use bevy_renet::renet::{DefaultChannel, RenetServer};
+use proc::TerrainPlugin;
 
 use crate::message::{client::MessageReaderOnClient, server::ReliableMessageFromServer};
 
@@ -88,6 +89,9 @@ impl Plugin for Game {
             GizmoPlugin,
             ConsolePlugin,
             GroundedPlugin,
+            TerrainPlugin {
+                is_server: self.is_server,
+            },
         ));
         if !self.is_server {
             app.add_systems(FixedUpdate, despawn.in_set(GameLogic::Spawn));

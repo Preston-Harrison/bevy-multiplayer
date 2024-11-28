@@ -432,6 +432,7 @@ pub fn spawn_players(
             continue;
         };
         if let NetworkSpawn::Player(transform) = spawn.net_spawn {
+            // BOOKMARK: player spawn
             println!("spawning player");
             commands
                 .spawn(Player::new())

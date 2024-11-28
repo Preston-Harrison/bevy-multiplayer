@@ -18,9 +18,9 @@ use rock::{Rock, RockPlugin};
 
 use self::tree::{Tree, TreePlugin};
 
+pub mod rock;
 pub mod shaders;
 pub mod tree;
-pub mod rock;
 
 pub struct TerrainPlugin {
     pub is_server: bool,

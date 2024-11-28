@@ -35,8 +35,8 @@ fn spawn_trees(
     let tree_mesh = match &rock_meshes.large_a {
         Some(handle) => handle.clone(),
         None => {
-            let handle =
-                asset_server.load(GltfAssetLabel::Scene(0).from_asset("kenny-nature/rock_largeA.glb"));
+            let handle = asset_server
+                .load(GltfAssetLabel::Scene(0).from_asset("kenny-nature/rock_largeA.glb"));
             rock_meshes.large_a = Some(handle.clone());
             handle
         }
