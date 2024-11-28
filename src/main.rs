@@ -7,6 +7,8 @@ mod message;
 mod proc;
 mod server;
 mod shared;
+mod test;
+mod utils;
 
 fn main() {
     let mut args = env::args();
@@ -15,6 +17,7 @@ fn main() {
         Some("server") => server::run(),
         Some("client") => client::run(),
         Some("proc") => proc::run(),
+        Some("test") => test::run(),
         Some(v) => panic!("{v} is not a valid run mode"),
         None => panic!("no run mode passed"),
     }
