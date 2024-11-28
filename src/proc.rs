@@ -3,6 +3,7 @@ use std::f32::consts::PI;
 use bevy::color::palettes::css::BLUE;
 use bevy::color::palettes::tailwind::RED_500;
 use bevy::core_pipeline::prepass::DepthPrepass;
+use bevy::dev_tools::fps_overlay::{FpsOverlayConfig, FpsOverlayPlugin};
 use bevy::input::mouse::MouseMotion;
 use bevy::pbr::{MaterialPipeline, MaterialPipelineKey};
 use bevy::prelude::*;
@@ -15,14 +16,29 @@ use bevy::window::{CursorGrabMode, PrimaryWindow};
 use bevy_rapier3d::prelude::*;
 use noise::Perlin;
 
-use crate::shared::proc::tree::{render_tree, Params};
-use crate::shared::proc::{ChunkTag, NoiseLayer, Terrain, TerrainMaterials};
-
-type TerrainResource = Terrain<StandardMaterial>;
+use crate::shared::proc::tree::{render_tree, Params, TreeSet};
+use crate::shared::proc::{
+    ChunkTag, NoiseLayer, NoiseMap, Terrain, TerrainMaterials, TerrainPlugin,
+};
 
 pub fn run() {
     App::new()
-        .add_plugins(DefaultPlugins)
+        .add_plugins((
+            DefaultPlugins,
+            TerrainPlugin,
+            FpsOverlayPlugin {
+                config: FpsOverlayConfig {
+                    text_config: TextStyle {
+                        // Here we define size of our overlay
+                        font_size: 50.0,
+                        // We can also change color of the overlay
+                        color: Color::srgb(0.0, 1.0, 0.0),
+                        // If we want, we can use a custom font
+                        font: default(),
+                    },
+                },
+            },
+        ))
         .add_plugins(RapierPhysicsPlugin::<NoUserData>::default())
         // .add_plugins(RapierDebugRenderPlugin::default())
         .add_systems(Startup, setup)
@@ -76,7 +92,20 @@ fn setup(
             ..default()
         }),
     };
-    let terrain: TerrainResource = Terrain::new(100, 5, noise_layers, terrain_materials);
+    let tree_noise = NoiseMap {
+        noise: Perlin::new(3),
+        frequency: 0.01,
+    };
+    let params = Params::new_desert_tree();
+    let tree_set = TreeSet::new(&[params], &mut meshes, &mut materials);
+    let terrain = Terrain::new(
+        100,
+        5,
+        noise_layers,
+        tree_set,
+        tree_noise,
+        terrain_materials,
+    );
     commands.insert_resource(terrain);
 
     commands.spawn(DirectionalLightBundle {
@@ -120,14 +149,9 @@ fn setup(
         .insert(KinematicCharacterController {
             ..KinematicCharacterController::default()
         });
-
-    let mut tree_params = Params::new_desert_tree();
-    tree_params.root_transform = Transform::from_xyz(0.0, 1.0, 0.0);
-    tree_params.root_height = 2.0;
-    render_tree(&mut commands, &mut meshes, &mut materials, &tree_params);
 }
 
-fn draw_gizmos(mut gizmos: Gizmos, query: Query<&ChunkTag>, terrain: Res<TerrainResource>) {
+fn draw_gizmos(mut gizmos: Gizmos, query: Query<&ChunkTag>, terrain: Res<Terrain>) {
     gizmos.arrow(Vec3::new(0.0, 0.0, 0.0), Vec3::new(20.0, 0.0, 0.0), BLUE);
     gizmos.arrow(Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 20.0), RED_500);
     gizmos.sphere(Vec3::new(0.0, 1.0, 0.0), Quat::IDENTITY, 1.0, BLUE);
@@ -196,7 +220,7 @@ fn render_chunks(
     player: Query<&Transform, With<FreeCamera>>,
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
-    terrain: Res<TerrainResource>,
+    terrain: Res<Terrain>,
     chunks: Query<(Entity, &ChunkTag)>,
 ) {
     let Ok(player) = player.get_single() else {

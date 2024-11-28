@@ -1,6 +1,66 @@
 /// Most of this is taken from https://github.com/hsaikia/ProceduralTreesBevy
 /// Thanks!
-use bevy::prelude::*;
+use bevy::{
+    prelude::*,
+    render::{
+        mesh::{Indices, PrimitiveTopology, VertexAttributeValues},
+        render_asset::RenderAssetUsages,
+    },
+};
+
+pub struct TreeSet {
+    pub handles: Vec<TreeHandles>,
+}
+
+impl TreeSet {
+    pub fn new(
+        params: &[Params],
+        meshes: &mut Assets<Mesh>,
+        materials: &mut Assets<StandardMaterial>,
+    ) -> Self {
+        let mut handles = vec![];
+        for param in params {
+            handles.push(TreeHandles::new(param, meshes, materials));
+        }
+        Self { handles }
+    }
+}
+
+pub struct TreeHandles {
+    pub branch_mesh: Handle<Mesh>,
+    pub branch_material: Handle<StandardMaterial>,
+    pub leaf_mesh: Handle<Mesh>,
+    pub leaf_material: Handle<StandardMaterial>,
+}
+
+impl TreeHandles {
+    pub fn new(
+        params: &Params,
+        meshes: &mut Assets<Mesh>,
+        materials: &mut Assets<StandardMaterial>,
+    ) -> Self {
+        let mut mesh = Sphere::new(params.leaf_radius).mesh().ico(2).unwrap();
+        mesh.asset_usage = RenderAssetUsages::RENDER_WORLD;
+        let leaf_mesh = meshes.add(mesh);
+        let leaf_material = materials.add(Color::srgb(0.0, 1.0, 0.0));
+
+        let mut mesh = Cylinder::new(params.base_radius, 1.0)
+            .mesh()
+            .resolution(6)
+            .segments(1)
+            .build();
+        mesh.asset_usage = RenderAssetUsages::RENDER_WORLD;
+        let branch_mesh = meshes.add(mesh);
+        let branch_material = materials.add(Color::srgb(0.8, 0.7, 0.6));
+
+        Self {
+            leaf_material,
+            leaf_mesh,
+            branch_material,
+            branch_mesh,
+        }
+    }
+}
 
 #[derive(Debug, Resource)]
 pub struct Params {
@@ -111,33 +171,27 @@ pub fn generate(params: &Params) -> Vec<Branch> {
 #[derive(Component)]
 pub struct TreeRoot;
 
-pub fn render_tree(
-    commands: &mut Commands,
-    meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<StandardMaterial>,
-    params: &Params,
-) {
+/// Returns the parent entity.
+pub fn render_tree(commands: &mut Commands, handles: &TreeHandles, params: &Params) -> Entity {
     // Generate and add the new tree
     let tree = generate(&params);
     let mut entity_parent_indices: Vec<(Entity, Option<usize>)> = Vec::new();
+    info!("rendering {} branches", tree.len());
 
-    let t = params.angle_from_parent_branch * 2.0 / std::f32::consts::PI;
-    let color_r = (1.0 - t * 2.0).max(0.0);
-    let color_g = if t < 0.5 { 2.0 * t } else { 2.0 - 2.0 * t };
-    let color_b = (t * 2.0 - 1.0).max(0.0);
-
-    let leaf_mesh = meshes.add(Sphere::new(params.leaf_radius).mesh().ico(2).unwrap());
-    let leaf_material = materials.add(Color::srgb(color_r, color_g, color_b));
-    let branch_mesh = meshes.add(Cylinder::new(params.base_radius, 1.0));
-    let branch_material = materials.add(Color::srgb(0.8, 0.7, 0.6));
+    let TreeHandles {
+        branch_mesh,
+        branch_material,
+        leaf_mesh,
+        leaf_material,
+    } = handles;
 
     for branch in &tree {
         if branch.is_leaf {
             let entity_id = commands
                 .spawn(PbrBundle {
                     mesh: leaf_mesh.clone(),
-                    transform: branch.transform,
                     material: leaf_material.clone(),
+                    transform: branch.transform,
                     ..default()
                 })
                 .id();
@@ -187,4 +241,153 @@ pub fn render_tree(
 
     // Add the TreeRoot component to the root node
     commands.entity(entity_parent_indices[0].0).insert(TreeRoot);
+    entity_parent_indices[0].0
+}
+
+/// https://gist.github.com/DGriffin91/e63e5f7a90b633250c2cf4bf8fd61ef8
+fn combine_meshes(
+    meshes: &[Mesh],
+    transforms: &[Transform],
+    use_normals: bool,
+    use_tangents: bool,
+    use_uvs: bool,
+    use_colors: bool,
+) -> Mesh {
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+
+    let mut positions: Vec<[f32; 3]> = Vec::new();
+    let mut normals: Vec<[f32; 3]> = Vec::new();
+    let mut tangets: Vec<[f32; 4]> = Vec::new();
+    let mut uvs: Vec<[f32; 2]> = Vec::new();
+    let mut colors: Vec<[f32; 4]> = Vec::new();
+    let mut indices: Vec<u32> = Vec::new();
+
+    let mut indices_offset = 0;
+
+    if meshes.len() != transforms.len() {
+        panic!(
+            "meshes.len({}) != transforms.len({})",
+            meshes.len(),
+            transforms.len()
+        );
+    }
+
+    for (mesh, trans) in meshes.iter().zip(transforms) {
+        if let Indices::U32(mesh_indices) = &mesh.indices().unwrap() {
+            let mat = trans.compute_matrix();
+
+            let positions_len;
+
+            if let Some(VertexAttributeValues::Float32x3(vert_positions)) =
+                &mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+            {
+                positions_len = vert_positions.len();
+                for p in vert_positions {
+                    positions.push(mat.transform_point3(Vec3::from(*p)).into());
+                }
+            } else {
+                panic!("no positions")
+            }
+
+            if use_uvs {
+                if let Some(VertexAttributeValues::Float32x2(vert_uv)) =
+                    &mesh.attribute(Mesh::ATTRIBUTE_UV_0)
+                {
+                    for uv in vert_uv {
+                        uvs.push(*uv);
+                    }
+                } else {
+                    panic!("no uvs")
+                }
+            }
+
+            if use_normals {
+                // Comment below taken from mesh_normal_local_to_world() in mesh_functions.wgsl regarding
+                // transform normals from local to world coordinates:
+
+                // NOTE: The mikktspace method of normal mapping requires that the world normal is
+                // re-normalized in the vertex shader to match the way mikktspace bakes vertex tangents
+                // and normal maps so that the exact inverse process is applied when shading. Blender, Unity,
+                // Unreal Engine, Godot, and more all use the mikktspace method. Do not change this code
+                // unless you really know what you are doing.
+                // http://www.mikktspace.com/
+
+                let inverse_transpose_model = mat.inverse().transpose();
+                let inverse_transpose_model = Mat3 {
+                    x_axis: inverse_transpose_model.x_axis.xyz(),
+                    y_axis: inverse_transpose_model.y_axis.xyz(),
+                    z_axis: inverse_transpose_model.z_axis.xyz(),
+                };
+
+                if let Some(VertexAttributeValues::Float32x3(vert_normals)) =
+                    &mesh.attribute(Mesh::ATTRIBUTE_NORMAL)
+                {
+                    for n in vert_normals {
+                        normals.push(
+                            inverse_transpose_model
+                                .mul_vec3(Vec3::from(*n))
+                                .normalize_or_zero()
+                                .into(),
+                        );
+                    }
+                } else {
+                    panic!("no normals")
+                }
+            }
+
+            if use_tangents {
+                if let Some(VertexAttributeValues::Float32x4(vert_tangets)) =
+                    &mesh.attribute(Mesh::ATTRIBUTE_TANGENT)
+                {
+                    for t in vert_tangets {
+                        tangets.push(*t);
+                    }
+                } else {
+                    panic!("no tangets")
+                }
+            }
+
+            if use_colors {
+                if let Some(VertexAttributeValues::Float32x4(vert_colors)) =
+                    &mesh.attribute(Mesh::ATTRIBUTE_COLOR)
+                {
+                    for c in vert_colors {
+                        colors.push(*c);
+                    }
+                } else {
+                    panic!("no colors")
+                }
+            }
+
+            for i in mesh_indices {
+                indices.push(*i + indices_offset);
+            }
+            indices_offset += positions_len as u32;
+        }
+    }
+
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+
+    if use_normals {
+        mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+    }
+
+    if use_tangents {
+        mesh.insert_attribute(Mesh::ATTRIBUTE_TANGENT, tangets);
+    }
+
+    if use_uvs {
+        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+    }
+
+    if use_colors {
+        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
+    }
+
+    mesh.insert_indices(Indices::U32(indices));
+
+    mesh
 }
