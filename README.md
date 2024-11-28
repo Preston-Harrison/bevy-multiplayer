@@ -1,6 +1,7 @@
 # Bevy Multiplayer Example
 Run the server with: `cargo run -- server`  
 Run the client with: `cargo run -- client`
+Run the demo of the procedural generation with `cargo run -- proc`
 
 
 ## Structure
@@ -10,6 +11,7 @@ Run the client with: `cargo run -- client`
   - **`main`**: Chooses to run the client or server based on a command-line flag.
   - **`messages/`**: Defines client and server messages and their parsers.
   - **`shared/`**: Contains shared game logic.
+    - **`proc/`**: Contains logic for procedural terrain generation:
     - **`objects/`**: Each object handles its own spawning and syncing logic:
       - **Server**: Spawning and syncing objects.
       - **Client**: Receiving spawns and syncs.
