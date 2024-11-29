@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -9,10 +11,14 @@ impl Plugin for GunPlugin {
     }
 }
 
+#[derive(Component)]
+pub struct LocalPlayerGun;
+
 #[derive(Component, Debug)]
 pub struct Gun {
     pub gun_type: GunType,
     pub bullet_point: Option<Entity>,
+    pub last_fire_time: Duration,
 }
 
 impl Gun {
@@ -20,7 +26,16 @@ impl Gun {
         Self {
             gun_type,
             bullet_point: None,
+            last_fire_time: Duration::default(),
         }
+    }
+
+    pub fn try_shoot(&mut self, elapsed: Duration) -> bool {
+        let can_shoot = elapsed - self.last_fire_time >= self.gun_type.bullet_delay();
+        if can_shoot {
+            self.last_fire_time = elapsed;
+        };
+        can_shoot
     }
 }
 
@@ -39,6 +54,22 @@ impl GunType {
     pub fn damage(&self) -> f32 {
         match self {
             Self::PurpleRifle => 10.0,
+        }
+    }
+
+    pub fn bullets_per_second(&self) -> f32 {
+        match self {
+            Self::PurpleRifle => 5.0,
+        }
+    }
+
+    pub fn bullet_delay(&self) -> Duration {
+        Duration::from_secs_f32(1.0 / self.bullets_per_second())
+    }
+
+    pub fn is_full_auto(&self) -> bool {
+        match self {
+            Self::PurpleRifle => true,
         }
     }
 }

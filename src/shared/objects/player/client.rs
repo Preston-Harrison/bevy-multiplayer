@@ -25,7 +25,7 @@ use crate::{
         objects::{
             gizmo::spawn_raycast_visual,
             grounded::Grounded,
-            gun::{Gun, GunType},
+            gun::{Gun, GunType, LocalPlayerGun},
             player::PlayerHead,
             LastSyncTracker, NetworkObject,
         },
@@ -239,25 +239,16 @@ pub struct IsFreecam(bool);
 // Couldn't figure out lifetimes so macro it is lol. This just runs a closure
 // that returns (camera global transform, bullet point global transform).
 macro_rules! get_cam_and_bullet_point_global_t {
-    ($global_transform_query:expr, $gun_query:expr, $cam_entity:expr) => {
+    ($global_transform_query:expr, $gun:expr, $cam_entity:expr) => {
         (|| {
             let cam_global_t = match $global_transform_query.get($cam_entity) {
                 Ok(transform) => transform,
                 Err(_) => return None,
             };
 
-            for (gun_parent, gun) in $gun_query.iter() {
-                if gun_parent.get() == $cam_entity {
-                    if let Some(bullet_point) = gun.bullet_point {
-                        if let Ok(bullet_point_global_t) = $global_transform_query.get(bullet_point)
-                        {
-                            return Some((
-                                cam_global_t,
-                                bullet_point_global_t,
-                                gun.gun_type.clone(),
-                            ));
-                        }
-                    }
+            if let Some(bullet_point) = $gun.bullet_point {
+                if let Ok(bullet_point_global_t) = $global_transform_query.get(bullet_point) {
+                    return Some((cam_global_t, bullet_point_global_t, $gun.gun_type.clone()));
                 }
             }
             None
@@ -275,12 +266,13 @@ pub fn read_input(
     mut ibuf: ResMut<InputBuffer>,
     local_player: Query<(&Transform, Entity), With<LocalPlayerTag>>,
     camera: Query<Entity, With<PlayerCamera>>,
-    gun_query: Query<(&Parent, &Gun)>,
+    mut local_gun: Query<&mut Gun, With<LocalPlayerGun>>,
     global_transform_query: Query<&GlobalTransform>,
     net_objs: Query<(&NetworkObject, &Transform)>,
     mut client: ResMut<RenetClient>,
     context: Res<RapierContext>,
     mut commands: Commands,
+    time: Res<Time>,
 ) {
     let Ok((player_transform, entity)) = local_player.get_single() else {
         error!("no player found when reading input");
@@ -293,27 +285,30 @@ pub fn read_input(
 
     let pressed_shoot_last_frame = pressed_shoot.0;
     pressed_shoot.0 = mouse_input.pressed(MouseButton::Left);
-    let shoot = !pressed_shoot_last_frame && pressed_shoot.0;
     let Ok(cam_entity) = camera.get_single() else {
         return;
     };
 
-    let shot = if shoot {
-        match get_cam_and_bullet_point_global_t!(&global_transform_query, &gun_query, cam_entity) {
-            Some((cam_global_t, bullet_point_global_t, gun_type)) => get_shot(
-                &mut commands,
-                &context,
-                entity,
-                cam_global_t,
-                bullet_point_global_t,
-                &net_objs,
-                gun_type,
-            ),
-            None => None,
+    let local_gun = local_gun.get_single_mut().ok();
+    let shot = local_gun.and_then(|mut gun| {
+        let shoot = (!pressed_shoot_last_frame || gun.gun_type.is_full_auto()) && pressed_shoot.0;
+        if shoot && gun.try_shoot(time.elapsed()) {
+            match get_cam_and_bullet_point_global_t!(&global_transform_query, gun, cam_entity) {
+                Some((cam_global_t, bullet_point_global_t, gun_type)) => get_shot(
+                    &mut commands,
+                    &context,
+                    entity,
+                    cam_global_t,
+                    bullet_point_global_t,
+                    &net_objs,
+                    gun_type,
+                ),
+                None => None,
+            }
+        } else {
+            None
         }
-    } else {
-        None
-    };
+    });
 
     let world_direction = player_transform.rotation * local_direction;
     let world_direction_xz = Vec3::new(world_direction.x, 0.0, world_direction.z);

@@ -4,7 +4,7 @@ use bevy_rapier3d::prelude::*;
 use crate::shared::{
     objects::{
         grounded::Grounded,
-        gun::{Gun, GunType},
+        gun::{Gun, GunType, LocalPlayerGun},
         health::Health,
         LastSyncTracker, NetworkObject,
     },
@@ -146,7 +146,11 @@ pub fn spawn_players_from_spawn_requests(
                     .insert(SpatialBundle::default())
                     .with_children(|parent| {
                         // TODO: consider parenting this to the player head, not the camera.
-                        parent.spawn((SpatialBundle::default(), Gun::new(GunType::PurpleRifle)));
+                        parent.spawn((
+                            SpatialBundle::default(),
+                            Gun::new(GunType::PurpleRifle),
+                            LocalPlayerGun,
+                        ));
                     });
             }
             PlayerSpawnRequest::Remote(transform, net_obj, tick) => {
