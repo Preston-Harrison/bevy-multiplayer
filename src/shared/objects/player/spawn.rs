@@ -1,4 +1,4 @@
-use bevy::{color::palettes::css::BLUE, prelude::*};
+use bevy::{color::palettes::css::BLUE, prelude::*, render::view::RenderLayers};
 use bevy_rapier3d::prelude::*;
 
 use crate::shared::{
@@ -8,6 +8,7 @@ use crate::shared::{
         LastSyncTracker, NetworkObject,
     },
     proc::LoadsChunks,
+    render::{DEFAULT_CAMERA_ORDER, DEFAULT_RENDER_LAYER},
     tick::Tick,
 };
 
@@ -128,9 +129,14 @@ pub fn spawn_players_from_spawn_requests(
                                 ..default()
                             }
                             .into(),
+                            camera: Camera {
+                                order: DEFAULT_CAMERA_ORDER,
+                                ..default()
+                            },
                             ..default()
                         },
                     ))
+                    .insert(RenderLayers::layer(DEFAULT_RENDER_LAYER))
                     .insert(SpatialBundle::default())
                     .with_children(|parent| {
                         // TODO: consider parenting this to the player head, not the camera.

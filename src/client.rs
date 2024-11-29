@@ -1,5 +1,4 @@
 use bevy::prelude::*;
-use bevy_inspector_egui::quick::WorldInspectorPlugin;
 use bevy_renet::renet::transport::{ClientAuthentication, NetcodeClientTransport};
 use bevy_renet::renet::{ConnectionConfig, DefaultChannel, RenetClient};
 use bevy_renet::transport::NetcodeClientPlugin;
@@ -15,6 +14,7 @@ use crate::shared::objects::player::spawn::PlayerSpawnRequest;
 use crate::shared::objects::player::LocalPlayer;
 use crate::shared::tick::get_client_tick;
 use crate::shared::AppState;
+use crate::ui::UIPlugin;
 use crate::utils::toggle_cursor_grab_with_esc;
 use crate::{message, shared};
 
@@ -30,7 +30,7 @@ enum LoadState {
 pub fn run() {
     let is_server = false;
     App::new()
-        .add_plugins((DefaultPlugins, Client, WorldInspectorPlugin::new()))
+        .add_plugins((DefaultPlugins, Client, UIPlugin { is_server }))
         .insert_state(LoadState::Init)
         .add_systems(Startup, spawn_connect_button)
         .add_systems(OnEnter(LoadState::Connecting), load_local)

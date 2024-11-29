@@ -23,12 +23,13 @@ use crate::{
         tick::{get_unix_millis, Tick},
         GameLogic,
     },
+    ui::UIPlugin,
 };
 
 pub fn run() {
     let is_server = true;
     App::new()
-        .add_plugins((DefaultPlugins, Server))
+        .add_plugins((DefaultPlugins, Server, UIPlugin { is_server }))
         .add_systems(Startup, (setup, setup_scene_1))
         .add_systems(
             FixedUpdate,

@@ -8,6 +8,7 @@ mod proc;
 mod server;
 mod shared;
 mod test;
+mod ui;
 mod utils;
 
 fn main() {
