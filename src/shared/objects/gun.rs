@@ -10,8 +10,8 @@ impl Plugin for GunPlugin {
 
 #[derive(Component)]
 pub struct Gun {
-    gun_type: GunType,
-    bullet_point: Option<Entity>,
+    pub gun_type: GunType,
+    pub bullet_point: Option<Entity>,
 }
 
 impl Gun {

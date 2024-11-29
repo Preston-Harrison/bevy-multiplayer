@@ -253,6 +253,31 @@ pub struct PressedShootLastFrame(bool);
 #[derive(Default)]
 pub struct IsFreecam(bool);
 
+// Couldn't figure out lifetimes so macro it is lol. This just runs a closure
+// that returns (camera global transform, bullet point global transform).
+macro_rules! get_cam_and_bullet_point_global_t {
+    ($global_transform_query:expr, $gun_query:expr, $cam_entity:expr) => {
+        (|| {
+            let cam_global_t = match $global_transform_query.get($cam_entity) {
+                Ok(transform) => transform,
+                Err(_) => return None,
+            };
+
+            for (gun_parent, gun) in $gun_query.iter() {
+                if gun_parent.get() == $cam_entity {
+                    if let Some(bullet_point) = gun.bullet_point {
+                        if let Ok(bullet_point_global_t) = $global_transform_query.get(bullet_point)
+                        {
+                            return Some((cam_global_t, bullet_point_global_t));
+                        }
+                    }
+                }
+            }
+            None
+        })()
+    };
+}
+
 /// Reads input from the keyboard and mouse and stores it in a buffer. Doesn't
 /// include rotation, like looking around.
 pub fn read_input(
@@ -261,15 +286,16 @@ pub fn read_input(
     mouse_input: Res<ButtonInput<MouseButton>>,
     keyboard_input: Res<ButtonInput<KeyCode>>,
     mut ibuf: ResMut<InputBuffer>,
-    query: Query<(&Transform, Entity), With<LocalPlayerTag>>,
-    camera: Query<&Transform, With<PlayerCamera>>,
+    local_player: Query<(&Transform, Entity), With<LocalPlayerTag>>,
+    camera: Query<Entity, With<PlayerCamera>>,
+    gun_query: Query<(&Parent, &Gun)>,
+    global_transform_query: Query<&GlobalTransform>,
     net_objs: Query<(&NetworkObject, &Transform)>,
     mut client: ResMut<RenetClient>,
     context: Res<RapierContext>,
     mut commands: Commands,
-    mut console: EventWriter<ConsoleMessage>,
 ) {
-    let Ok((player_transform, entity)) = query.get_single() else {
+    let Ok((player_transform, entity)) = local_player.get_single() else {
         error!("no player found when reading input");
         return;
     };
@@ -281,14 +307,25 @@ pub fn read_input(
     let pressed_shoot_last_frame = pressed_shoot.0;
     pressed_shoot.0 = mouse_input.pressed(MouseButton::Left);
     let shoot = !pressed_shoot_last_frame && pressed_shoot.0;
-    let Ok(camera) = camera.get_single() else {
+    let Ok(cam_entity) = camera.get_single() else {
         return;
     };
-    let shot = get_shot(&mut commands, &context, entity, shoot, camera, net_objs);
 
-    if let Some(ref shot) = shot {
-        console.send(ConsoleMessage::new(format!("you shot {:?}", shot)));
-    }
+    let shot = if shoot {
+        match get_cam_and_bullet_point_global_t!(&global_transform_query, &gun_query, cam_entity) {
+            Some((cam_global_t, bullet_point_global_t)) => get_shot(
+                &mut commands,
+                &context,
+                entity,
+                cam_global_t,
+                bullet_point_global_t,
+                &net_objs,
+            ),
+            None => None,
+        }
+    } else {
+        None
+    };
 
     let world_direction = player_transform.rotation * local_direction;
     let world_direction_xz = Vec3::new(world_direction.x, 0.0, world_direction.z);
@@ -326,31 +363,60 @@ fn get_direction(keyboard_input: &ButtonInput<KeyCode>) -> Vec3 {
 }
 
 /// Spawns a raycast towards a target and returns a `Shot` if there's a hit.
+/// First raycasts from the camera to a target, then returns the shot from the
+/// bullet point camera target. This is so that the bullet goes where the player
+/// is looking, but still comes out of the gun.
 fn get_shot(
     commands: &mut Commands,
     context: &RapierContext,
     shooter: Entity,
-    shoot: bool,
-    camera: &Transform,
-    net_objs: Query<(&NetworkObject, &Transform)>,
+    camera: &GlobalTransform,
+    bullet_point: &GlobalTransform,
+    net_objs: &Query<(&NetworkObject, &Transform)>,
 ) -> Option<Shot> {
-    if !shoot {
-        return None;
-    }
-    let ray_pos = camera.translation;
-    let ray_dir = *camera.forward();
-    let max_toi = 10.0;
+    let bullet_range = 20.0;
+
+    // Cast ray from camera to find where the bullet should go.
+    let cam_ray_pos = camera.translation();
+    // TODO: tune or calculate this number
+    // The number exists so that the bullet pretty much aligns with the camera
+    // when shooting nothing (at max range of bullet).
+    let cam_range = bullet_range + 1.0;
+    let cam_ray_dir = *camera.forward();
+    let cam_raycast = context.cast_ray(
+        cam_ray_pos,
+        cam_ray_dir,
+        cam_range,
+        false,
+        QueryFilter::default().exclude_collider(shooter),
+    );
+    let cam_hit_point = cam_ray_pos
+        + match cam_raycast {
+            Some((_, toi)) => cam_ray_dir * toi,
+            None => cam_ray_dir * cam_range,
+        };
+
+    // Cast ray from the bullet to the camera hit point.
+    let bullet_ray_pos = bullet_point.translation();
+    let bullet_ray_dir = (-bullet_ray_pos + cam_hit_point).normalize();
     let raycast = context.cast_ray(
-        ray_pos,
-        ray_dir,
-        max_toi,
+        bullet_ray_pos,
+        bullet_ray_dir,
+        bullet_range,
         false,
         QueryFilter::default().exclude_collider(shooter),
     );
     match raycast {
         Some((entity, toi)) => {
-            spawn_raycast_visual(commands, ray_pos, ray_dir, toi, GREEN_500, 2000);
-            let impact_point = ray_pos + (ray_dir * toi);
+            spawn_raycast_visual(
+                commands,
+                bullet_ray_pos,
+                bullet_ray_dir,
+                toi,
+                GREEN_500,
+                2000,
+            );
+            let impact_point = bullet_ray_pos + (bullet_ray_dir * toi);
             net_objs.get(entity).ok().map(|(obj, transform)| {
                 let relative_position = impact_point - transform.translation;
                 Shot::ShotTarget(ShotTarget {
@@ -360,9 +426,16 @@ fn get_shot(
             })
         }
         None => {
-            spawn_raycast_visual(commands, ray_pos, ray_dir, max_toi, YELLOW_500, 2000);
+            spawn_raycast_visual(
+                commands,
+                bullet_ray_pos,
+                bullet_ray_dir,
+                bullet_range,
+                YELLOW_500,
+                2000,
+            );
             Some(Shot::ShotNothing(ShotNothing {
-                vector: ray_dir * max_toi,
+                vector: bullet_ray_dir * bullet_range,
             }))
         }
     }

@@ -20,6 +20,7 @@ pub struct ConsoleMessage {
 }
 
 impl ConsoleMessage {
+    #[allow(unused)]
     pub fn new(content: String) -> Self {
         Self {
             content: content + "\n",

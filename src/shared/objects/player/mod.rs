@@ -217,9 +217,13 @@ pub fn spawn_player(
         SpawnMode::Server(_) => {
             entity.insert(LastInputTracker::default());
             entity.with_children(|parent| {
-                parent.spawn(SpatialBundle::from_transform(Transform::from_xyz(0.0, 0.5, 0.0))).with_children(|parent| {
-                    parent.spawn((SpatialBundle::default(), Gun::new(GunType::PurpleRifle)));
-                });
+                parent
+                    .spawn(SpatialBundle::from_transform(Transform::from_xyz(
+                        0.0, 0.5, 0.0,
+                    )))
+                    .with_children(|parent| {
+                        parent.spawn((SpatialBundle::default(), Gun::new(GunType::PurpleRifle)));
+                    });
             });
         }
         SpawnMode::Client(tick) => {
