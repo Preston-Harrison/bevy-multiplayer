@@ -521,9 +521,20 @@ pub fn spawn_players(
                     KinematicCharacterController::default(),
                     RigidBody::KinematicPositionBased,
                     Collider::capsule_y(0.5, 0.25),
-                    TransformBundle::from_transform(transform),
+                    SpatialBundle::from_transform(transform),
                 ))
-                .insert(spawn.net_obj.clone());
+                .insert(spawn.net_obj.clone())
+                .with_children(|parent| {
+                    // Mimics structure of actual player, where the first parent
+                    // is the player camera.
+                    parent
+                        .spawn(SpatialBundle::from_transform(Transform::from_xyz(
+                            0.0, 0.5, 0.0,
+                        )))
+                        .with_children(|parent| {
+                            parent.spawn((SpatialBundle::default(), Gun::new(GunType::PurpleRifle)));
+                        });
+                });
         }
     }
 }

@@ -66,7 +66,7 @@ fn setup(
             parent
                 .spawn((
                     GameCamera,
-                    TransformBundle::from_transform(Transform::from_translation(Vec3::new(
+                    SpatialBundle::from_transform(Transform::from_translation(Vec3::new(
                         0.0, 1.5, 0.0,
                     ))),
                     Name::new("Game Camera"),
