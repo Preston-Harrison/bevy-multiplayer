@@ -532,7 +532,8 @@ pub fn spawn_players(
                             0.0, 0.5, 0.0,
                         )))
                         .with_children(|parent| {
-                            parent.spawn((SpatialBundle::default(), Gun::new(GunType::PurpleRifle)));
+                            parent
+                                .spawn((SpatialBundle::default(), Gun::new(GunType::PurpleRifle)));
                         });
                 });
         }
