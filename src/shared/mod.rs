@@ -66,7 +66,7 @@ fn despawn(
         };
         for (e, obj) in query.iter() {
             if obj == network_obj {
-                commands.entity(e).despawn();
+                commands.entity(e).despawn_recursive();
                 break;
             }
         }
@@ -86,7 +86,9 @@ impl Plugin for Game {
             PlayerPlugin {
                 is_server: self.is_server,
             },
-            PhysicsPlugin { debug: true },
+            PhysicsPlugin {
+                debug: self.is_server,
+            },
             GizmoPlugin,
             ConsolePlugin,
             GroundedPlugin,

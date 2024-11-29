@@ -6,4 +6,3 @@ pub enum NetworkSpawn {
     Player(Transform),
     Ball(Transform),
 }
-

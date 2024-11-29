@@ -11,14 +11,4 @@ pub struct MessagesAvailable;
 
 pub mod client;
 pub mod server;
-
-pub mod spawn {
-    use bevy::prelude::*;
-    use serde::{Deserialize, Serialize};
-
-    #[derive(Serialize, Deserialize, Debug)]
-    pub enum NetworkSpawn {
-        Player(Transform),
-        Ball(Transform),
-    }
-}
+pub mod spawn;
