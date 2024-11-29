@@ -4,7 +4,10 @@ use bevy::{
 };
 use bevy_inspector_egui::quick::WorldInspectorPlugin;
 
-use crate::utils::freecam::{FreeCamera, FreeCameraPlugin};
+use crate::utils::{
+    freecam::{FreeCamera, FreeCameraPlugin},
+    toggle_cursor_grab_with_esc,
+};
 
 pub fn run() {
     App::new()
@@ -14,7 +17,14 @@ pub fn run() {
             WorldInspectorPlugin::new(),
         ))
         .add_systems(Startup, setup)
-        .add_systems(Update, (snap_to_game_cam, toggle_collider_visual))
+        .add_systems(
+            Update,
+            (
+                snap_to_game_cam,
+                toggle_collider_visual,
+                toggle_cursor_grab_with_esc,
+            ),
+        )
         .run();
 }
 

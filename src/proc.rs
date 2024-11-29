@@ -9,6 +9,7 @@ use bevy::window::{CursorGrabMode, PrimaryWindow};
 use bevy_rapier3d::prelude::*;
 
 use crate::shared::proc::{Chunk, LoadsChunks, Terrain, TerrainConfig, TerrainPlugin};
+use crate::utils::toggle_cursor_grab_with_esc;
 
 pub fn run() {
     App::new()
@@ -34,7 +35,7 @@ pub fn run() {
             (
                 free_camera_movement,
                 mouse_look,
-                toggle_cursor_grab,
+                toggle_cursor_grab_with_esc,
                 draw_gizmos,
                 sync_terrain_config,
             ),
@@ -109,21 +110,6 @@ fn draw_gizmos(mut gizmos: Gizmos, query: Query<&Chunk>, terrain: Res<Terrain>) 
 
     for tag in query.iter() {
         terrain.draw_chunk_gizmo(&mut gizmos, tag.position);
-    }
-}
-
-fn toggle_cursor_grab(
-    keys: Res<ButtonInput<KeyCode>>,
-    mut q_windows: Query<&mut Window, With<PrimaryWindow>>,
-) {
-    if keys.just_pressed(KeyCode::Escape) {
-        let mut primary_window = q_windows.single_mut();
-        primary_window.cursor.visible = !primary_window.cursor.visible;
-        primary_window.cursor.grab_mode = if primary_window.cursor.visible {
-            CursorGrabMode::None
-        } else {
-            CursorGrabMode::Locked
-        };
     }
 }
 

@@ -1,5 +1,4 @@
 use bevy::prelude::*;
-use bevy::window::{CursorGrabMode, PrimaryWindow};
 use bevy_inspector_egui::quick::WorldInspectorPlugin;
 use bevy_renet::renet::transport::{ClientAuthentication, NetcodeClientTransport};
 use bevy_renet::renet::{ConnectionConfig, DefaultChannel, RenetClient};
@@ -16,6 +15,7 @@ use crate::shared::objects::player::LocalPlayer;
 use crate::shared::tick::get_client_tick;
 use crate::shared::AppState;
 use crate::shared::SpawnMode;
+use crate::utils::toggle_cursor_grab_with_esc;
 use crate::{message, shared};
 
 #[derive(States, Debug, Clone, PartialEq, Eq, Hash)]
@@ -45,7 +45,7 @@ pub fn run() {
         )
         .add_systems(
             Update,
-            (cursor_grab, toggle_cursor_grab).run_if(in_state(LoadState::Done)),
+            toggle_cursor_grab_with_esc.run_if(in_state(LoadState::Done)),
         )
         .insert_state(shared::AppState::MainMenu)
         .add_plugins((
@@ -229,31 +229,5 @@ fn set_local_player(
         app_state.set(AppState::InGame);
         load_state.set(LoadState::Done);
         commands.entity(ui_camera.single()).despawn_recursive();
-    }
-}
-
-fn cursor_grab(
-    buttons: Res<ButtonInput<MouseButton>>,
-    mut q_windows: Query<&mut Window, With<PrimaryWindow>>,
-) {
-    if buttons.just_pressed(MouseButton::Left) {
-        let mut primary_window = q_windows.single_mut();
-
-        // for a game that doesn't use the cursor (like a shooter):
-        // use `Locked` mode to keep the cursor in one place
-        primary_window.cursor.grab_mode = CursorGrabMode::Locked;
-        primary_window.cursor.visible = false;
-    }
-}
-
-fn toggle_cursor_grab(
-    keys: Res<ButtonInput<KeyCode>>,
-    mut q_windows: Query<&mut Window, With<PrimaryWindow>>,
-) {
-    if keys.just_pressed(KeyCode::Escape) {
-        let mut primary_window = q_windows.single_mut();
-
-        primary_window.cursor.grab_mode = CursorGrabMode::None;
-        primary_window.cursor.visible = true;
     }
 }

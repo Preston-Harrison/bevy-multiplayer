@@ -1,3 +1,23 @@
+use bevy::{
+    prelude::*,
+    window::{CursorGrabMode, PrimaryWindow},
+};
+
+pub fn toggle_cursor_grab_with_esc(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut q_windows: Query<&mut Window, With<PrimaryWindow>>,
+) {
+    if keys.just_pressed(KeyCode::Escape) {
+        let mut primary_window = q_windows.single_mut();
+        primary_window.cursor.visible = !primary_window.cursor.visible;
+        primary_window.cursor.grab_mode = if primary_window.cursor.visible {
+            CursorGrabMode::None
+        } else {
+            CursorGrabMode::Locked
+        };
+    }
+}
+
 pub mod freecam {
     use bevy::{
         input::mouse::MouseMotion,
@@ -9,10 +29,7 @@ pub mod freecam {
 
     impl Plugin for FreeCameraPlugin {
         fn build(&self, app: &mut App) {
-            app.add_systems(
-                Update,
-                (toggle_cursor_grab, free_camera_movement, mouse_look),
-            );
+            app.add_systems(Update, (free_camera_movement, mouse_look));
         }
     }
 
@@ -28,21 +45,6 @@ pub mod freecam {
                 speed,
                 movement_enabled: true,
             }
-        }
-    }
-
-    fn toggle_cursor_grab(
-        keys: Res<ButtonInput<KeyCode>>,
-        mut q_windows: Query<&mut Window, With<PrimaryWindow>>,
-    ) {
-        if keys.just_pressed(KeyCode::Escape) {
-            let mut primary_window = q_windows.single_mut();
-            primary_window.cursor.visible = !primary_window.cursor.visible;
-            primary_window.cursor.grab_mode = if primary_window.cursor.visible {
-                CursorGrabMode::None
-            } else {
-                CursorGrabMode::Locked
-            };
         }
     }
 
