@@ -53,8 +53,17 @@ pub struct ShotNothing {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ShotPosition {
+    position: Vec3,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum Shot {
+    /// For when the player shoots another network object.
     ShotTarget(ShotTarget),
+    /// For when the player shoots something that isn't a network object.
+    ShotPosition(ShotPosition),
+    /// For when the player shoots into the air.
     ShotNothing(ShotNothing),
 }
 

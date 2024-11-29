@@ -36,7 +36,8 @@ use crate::{
 };
 
 use super::{
-    Input, LocalPlayer, LocalPlayerTag, Player, PlayerKinematics, Shot, ShotNothing, ShotTarget,
+    Input, LocalPlayer, LocalPlayerTag, Player, PlayerKinematics, Shot, ShotNothing, ShotPosition,
+    ShotTarget,
 };
 
 pub struct PlayerClientPlugin;
@@ -430,13 +431,18 @@ fn get_shot(
                 2000,
             );
             let impact_point = bullet_ray_pos + (bullet_ray_dir * toi);
-            net_objs.get(entity).ok().map(|(obj, transform)| {
-                let relative_position = impact_point - transform.translation;
-                Shot::ShotTarget(ShotTarget {
-                    target: obj.clone(),
-                    relative_position,
-                })
-            })
+            match net_objs.get(entity).ok() {
+                Some((obj, transform)) => {
+                    let relative_position = impact_point - transform.translation;
+                    Some(Shot::ShotTarget(ShotTarget {
+                        target: obj.clone(),
+                        relative_position,
+                    }))
+                }
+                None => Some(Shot::ShotPosition(ShotPosition {
+                    position: impact_point,
+                })),
+            }
         }
         None => {
             spawn_raycast_visual(
@@ -514,6 +520,14 @@ pub fn recv_player_shot(
                 }
                 _ => warn!("got zero valued shot vector"),
             },
+            Shot::ShotPosition(shot) => spawn_raycast_visual(
+                &mut commands,
+                shooter_pos,
+                -shooter_pos + shot.position,
+                (-shooter_pos + shot.position).length(),
+                GREEN_500,
+                2000,
+            ),
             Shot::ShotTarget(shot) => {
                 let target_pos = net_obj_query
                     .iter()
