@@ -420,6 +420,13 @@ pub fn tree_spawn_system(
         return;
     };
     for (entity, chunk) in chunks.iter() {
+        if commands.get_entity(entity).is_none() {
+            // This can happen if the chunk is despawned in the same tick.
+            // See:
+            //  - https://github.com/bevyengine/bevy/issues/7118
+            //  - https://github.com/bevyengine/bevy/pull/15929
+            continue;
+        }
         trace!("spawning trees for {:?}", chunk);
         terrain.spawn_trees_and_rocks(&mut commands, &context, chunk, entity);
     }
