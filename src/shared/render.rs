@@ -12,3 +12,5 @@ pub const DEFAULT_CAMERA_ORDER: isize = 0;
 
 /// UI Elements are rendered on top of the game.
 pub const UI_CAMERA_ORDER: isize = 1;
+
+pub const UI_RENDER_LAYER: usize = 1;
