@@ -9,7 +9,7 @@ use crate::shared::{physics::char_ctrl_to_move_opts, GameLogic};
 
 use self::{client::PlayerClientPlugin, server::PlayerServerPlugin};
 
-use super::{grounded::Grounded, NetworkObject};
+use super::{grounded::Grounded, gun::GunType, NetworkObject};
 
 pub mod client;
 pub mod server;
@@ -58,7 +58,13 @@ pub struct ShotPosition {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub enum Shot {
+pub struct Shot {
+    pub shot_type: ShotType,
+    pub gun_type: GunType,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum ShotType {
     /// For when the player shoots another network object.
     ShotTarget(ShotTarget),
     /// For when the player shoots something that isn't a network object.
@@ -101,6 +107,7 @@ fn tick_jump_cooldown(mut query: Query<&mut Player>, time: Res<Time>) {
         player.jump_cooldown_timer.tick(time.delta());
     }
 }
+
 fn apply_input(
     context: &mut RapierContext,
     input: &Input,

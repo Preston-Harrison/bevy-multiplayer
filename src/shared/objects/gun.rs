@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use serde::{Deserialize, Serialize};
 
 pub struct GunPlugin;
 
@@ -23,9 +24,23 @@ impl Gun {
     }
 }
 
-#[derive(Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum GunType {
     PurpleRifle,
+}
+
+impl GunType {
+    pub fn range(&self) -> f32 {
+        match self {
+            Self::PurpleRifle => 30.0,
+        }
+    }
+
+    pub fn damage(&self) -> f32 {
+        match self {
+            Self::PurpleRifle => 10.0,
+        }
+    }
 }
 
 #[derive(Component)]

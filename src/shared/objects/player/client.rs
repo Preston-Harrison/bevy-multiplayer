@@ -23,7 +23,10 @@ use crate::{
     },
     shared::{
         objects::{
-            gizmo::spawn_raycast_visual, grounded::Grounded, gun::Gun, player::PlayerHead,
+            gizmo::spawn_raycast_visual,
+            grounded::Grounded,
+            gun::{Gun, GunType},
+            player::PlayerHead,
             LastSyncTracker, NetworkObject,
         },
         physics::apply_kinematics,
@@ -34,7 +37,7 @@ use crate::{
 
 use super::{
     spawn::PlayerSpawnRequest, Input, LocalPlayer, LocalPlayerTag, Player, PlayerKinematics, Shot,
-    ShotNothing, ShotPosition, ShotTarget,
+    ShotNothing, ShotPosition, ShotTarget, ShotType,
 };
 
 pub struct PlayerClientPlugin;
@@ -232,6 +235,7 @@ pub struct PressedShootLastFrame(bool);
 #[derive(Default)]
 pub struct IsFreecam(bool);
 
+// TODO: wrangle lifetimes
 // Couldn't figure out lifetimes so macro it is lol. This just runs a closure
 // that returns (camera global transform, bullet point global transform).
 macro_rules! get_cam_and_bullet_point_global_t {
@@ -247,7 +251,11 @@ macro_rules! get_cam_and_bullet_point_global_t {
                     if let Some(bullet_point) = gun.bullet_point {
                         if let Ok(bullet_point_global_t) = $global_transform_query.get(bullet_point)
                         {
-                            return Some((cam_global_t, bullet_point_global_t));
+                            return Some((
+                                cam_global_t,
+                                bullet_point_global_t,
+                                gun.gun_type.clone(),
+                            ));
                         }
                     }
                 }
@@ -292,13 +300,14 @@ pub fn read_input(
 
     let shot = if shoot {
         match get_cam_and_bullet_point_global_t!(&global_transform_query, &gun_query, cam_entity) {
-            Some((cam_global_t, bullet_point_global_t)) => get_shot(
+            Some((cam_global_t, bullet_point_global_t, gun_type)) => get_shot(
                 &mut commands,
                 &context,
                 entity,
                 cam_global_t,
                 bullet_point_global_t,
                 &net_objs,
+                gun_type,
             ),
             None => None,
         }
@@ -352,8 +361,9 @@ fn get_shot(
     camera: &GlobalTransform,
     bullet_point: &GlobalTransform,
     net_objs: &Query<(&NetworkObject, &Transform)>,
+    gun_type: GunType,
 ) -> Option<Shot> {
-    let bullet_range = 20.0;
+    let bullet_range = gun_type.range();
 
     // Cast ray from camera to find where the bullet should go.
     let cam_ray_pos = camera.translation();
@@ -385,7 +395,7 @@ fn get_shot(
         false,
         QueryFilter::default().exclude_collider(shooter),
     );
-    match raycast {
+    let shot_type = match raycast {
         Some((entity, toi)) => {
             spawn_raycast_visual(
                 commands,
@@ -399,12 +409,12 @@ fn get_shot(
             match net_objs.get(entity).ok() {
                 Some((obj, transform)) => {
                     let relative_position = impact_point - transform.translation;
-                    Some(Shot::ShotTarget(ShotTarget {
+                    Some(ShotType::ShotTarget(ShotTarget {
                         target: obj.clone(),
                         relative_position,
                     }))
                 }
-                None => Some(Shot::ShotPosition(ShotPosition {
+                None => Some(ShotType::ShotPosition(ShotPosition {
                     position: impact_point,
                 })),
             }
@@ -418,11 +428,15 @@ fn get_shot(
                 YELLOW_500,
                 2000,
             );
-            Some(Shot::ShotNothing(ShotNothing {
+            Some(ShotType::ShotNothing(ShotNothing {
                 vector: bullet_ray_dir * bullet_range,
             }))
         }
-    }
+    };
+    shot_type.map(|shot_type| Shot {
+        shot_type,
+        gun_type,
+    })
 }
 
 /// Receives `Shot` messages from the server and spawns a visual.
@@ -471,8 +485,8 @@ pub fn recv_player_shot(
             continue;
         };
 
-        match shot {
-            Shot::ShotNothing(shot) => match shot.vector.try_normalize() {
+        match &shot.shot_type {
+            ShotType::ShotNothing(shot) => match shot.vector.try_normalize() {
                 Some(vector) => {
                     spawn_raycast_visual(
                         &mut commands,
@@ -485,7 +499,7 @@ pub fn recv_player_shot(
                 }
                 _ => warn!("got zero valued shot vector"),
             },
-            Shot::ShotPosition(shot) => spawn_raycast_visual(
+            ShotType::ShotPosition(shot) => spawn_raycast_visual(
                 &mut commands,
                 shooter_pos,
                 -shooter_pos + shot.position,
@@ -493,7 +507,7 @@ pub fn recv_player_shot(
                 GREEN_500,
                 2000,
             ),
-            Shot::ShotTarget(shot) => {
+            ShotType::ShotTarget(shot) => {
                 let target_pos = net_obj_query
                     .iter()
                     .find(|(obj, _)| **obj == shot.target)

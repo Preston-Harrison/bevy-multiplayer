@@ -20,7 +20,7 @@ use crate::{
     utils,
 };
 
-use super::{spawn::PlayerSpawnRequest, PlayerHead, Shot};
+use super::{spawn::PlayerSpawnRequest, PlayerHead, ShotType};
 
 pub struct PlayerServerPlugin;
 
@@ -231,10 +231,10 @@ pub fn apply_inputs(
                     UnreliableMessageFromServer::PlayerShot(item.net_obj.clone(), shot.clone());
                 let bytes = bincode::serialize(&message).unwrap();
                 server.broadcast_message_except(inputter, DefaultChannel::Unreliable, bytes);
-                if let Shot::ShotTarget(target) = shot {
+                if let ShotType::ShotTarget(target) = &shot.shot_type {
                     for (net_obj, mut health) in health.iter_mut() {
                         if *net_obj == target.target {
-                            health.current = (health.current - 10.0).max(0.0);
+                            health.current = (health.current - shot.gun_type.damage()).max(0.0);
                         }
                     }
                 }
