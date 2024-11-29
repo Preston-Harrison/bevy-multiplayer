@@ -78,13 +78,13 @@ pub mod health {
         render::view::RenderLayers,
     };
 
-    use crate::shared::render::UI_RENDER_LAYER;
+    use crate::shared::{
+        objects::{health::Health, player::LocalPlayerTag},
+        render::UI_RENDER_LAYER,
+    };
 
     #[derive(Component)]
-    pub struct Health {
-        current: i32,
-        max: i32,
-    }
+    pub struct LocalPlayerHealthBar;
 
     #[derive(Default)]
     pub struct IsSpawned(bool);
@@ -124,10 +124,7 @@ pub mod health {
                             ..default()
                         },
                         RenderLayers::layer(UI_RENDER_LAYER),
-                        Health {
-                            current: 50,
-                            max: 100,
-                        },
+                        LocalPlayerHealthBar,
                     ))
                     .with_children(|parent| {
                         parent.spawn((
@@ -147,24 +144,25 @@ pub mod health {
     }
 
     pub fn draw_local_health_bar(
-        health: Query<(&Health, &Children)>,
+        health: Query<&Health, With<LocalPlayerTag>>,
+        health_bar: Query<&Children, With<LocalPlayerHealthBar>>,
         mut width: Query<&mut Style>,
     ) {
-        let Ok((health_bar, children)) = health.get_single() else {
-            warn!("no health.get_single()");
+        let Ok(health) = health.get_single() else {
+            return;
+        };
+        let Ok(children) = health_bar.get_single() else {
             return;
         };
         let Some(child) = children.get(0) else {
-            warn!("children");
+            error!("health bar with no children");
             return;
         };
-
         let Ok(mut health_bar_style) = width.get_mut(*child) else {
-            warn!("no style");
+            error!("health child with no style");
             return;
         };
 
-        health_bar_style.width =
-            Val::Percent(100.0 * health_bar.current as f32 / health_bar.max as f32);
+        health_bar_style.width = Val::Percent(100.0 * health.current / health.max);
     }
 }

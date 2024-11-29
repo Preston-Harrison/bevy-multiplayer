@@ -5,6 +5,7 @@ use crate::shared::{
     objects::{
         grounded::Grounded,
         gun::{Gun, GunType},
+        health::Health,
         LastSyncTracker, NetworkObject,
     },
     proc::LoadsChunks,
@@ -66,6 +67,8 @@ fn get_player_visual(
     }
 }
 
+const PLAYER_HEALTH: f32 = 100.0;
+
 pub fn spawn_players_from_spawn_requests(
     mut visual_handles: Local<PlayerVisualHandles>,
     mut player_spawn_reqs: EventReader<PlayerSpawnRequest>,
@@ -84,6 +87,7 @@ pub fn spawn_players_from_spawn_requests(
                         net_obj.clone(),
                         LoadsChunks,
                         get_player_visual(&mut visual_handles, &mut meshes, &mut materials),
+                        Health::new(PLAYER_HEALTH),
                     ))
                     .insert(SpatialBundle::from_transform(*transform))
                     .insert(LastInputTracker::default())
@@ -111,7 +115,9 @@ pub fn spawn_players_from_spawn_requests(
                         net_obj.clone(),
                         LoadsChunks,
                         LocalPlayerTag,
-                        LastSyncTracker::<Transform>::new(tick.clone()),
+                        LastSyncTracker::<Transform>::new(*tick),
+                        LastSyncTracker::<Health>::new(*tick),
+                        Health::new(PLAYER_HEALTH),
                     ))
                     .with_children(|parent| {
                         parent.spawn((
@@ -149,8 +155,10 @@ pub fn spawn_players_from_spawn_requests(
                         Player::new(),
                         PlayerPhysicsBundle::default(),
                         net_obj.clone(),
-                        LastSyncTracker::<Transform>::new(tick.clone()),
+                        LastSyncTracker::<Transform>::new(*tick),
+                        LastSyncTracker::<Health>::new(*tick),
                         get_player_visual(&mut visual_handles, &mut meshes, &mut materials),
+                        Health::new(PLAYER_HEALTH),
                     ))
                     .insert(SpatialBundle::from_transform(*transform))
                     .with_children(|parent| {

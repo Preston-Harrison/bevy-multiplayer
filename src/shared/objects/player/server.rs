@@ -13,14 +13,14 @@ use crate::{
     },
     server::{ClientNetworkObjectMap, PlayerNeedsInit, PlayerWantsUpdates},
     shared::{
-        objects::{grounded::Grounded, player::Player, NetworkObject},
+        objects::{grounded::Grounded, health::Health, player::Player, NetworkObject},
         tick::Tick,
         GameLogic,
     },
     utils,
 };
 
-use super::{spawn::PlayerSpawnRequest, PlayerHead};
+use super::{spawn::PlayerSpawnRequest, PlayerHead, Shot};
 
 pub struct PlayerServerPlugin;
 
@@ -212,6 +212,7 @@ pub struct InputQuery {
 
 /// Grabs the most recent input for each player and applies it using `apply_input`.
 pub fn apply_inputs(
+    mut health: Query<(&NetworkObject, &mut Health)>,
     mut query: Query<InputQuery, With<Player>>,
     time: Res<Time>,
     mut inputs: ResMut<ClientInputs>,
@@ -230,6 +231,13 @@ pub fn apply_inputs(
                     UnreliableMessageFromServer::PlayerShot(item.net_obj.clone(), shot.clone());
                 let bytes = bincode::serialize(&message).unwrap();
                 server.broadcast_message_except(inputter, DefaultChannel::Unreliable, bytes);
+                if let Shot::ShotTarget(target) = shot {
+                    for (net_obj, mut health) in health.iter_mut() {
+                        if *net_obj == target.target {
+                            health.current = (health.current - 10.0).max(0.0);
+                        }
+                    }
+                }
             }
             super::apply_input(
                 &mut context,

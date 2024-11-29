@@ -40,11 +40,19 @@ pub struct PlayerInit {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
+pub struct HealthSync {
+    pub net_obj: NetworkObject,
+    pub tick: Tick,
+    pub health: f32,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
 pub enum ReliableMessageFromServer {
     Spawn(Spawn),
     Despawn(NetworkObject),
     InitPlayer(PlayerInit),
     TickSync(TickSync),
+    HealthSync(HealthSync),
 }
 
 #[derive(Serialize, Deserialize, Debug)]

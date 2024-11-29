@@ -11,7 +11,9 @@ use crate::message::{
 
 use super::GameLogic;
 
-#[derive(Resource, Serialize, Deserialize, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(
+    Resource, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash,
+)]
 pub struct Tick(u64);
 
 #[derive(Resource)]
