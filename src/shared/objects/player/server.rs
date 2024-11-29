@@ -21,7 +21,10 @@ use crate::{
         tick::Tick,
         GameLogic, SpawnMode,
     },
+    utils,
 };
+
+use super::PlayerHead;
 
 pub struct PlayerServerPlugin;
 
@@ -31,6 +34,7 @@ impl Plugin for PlayerServerPlugin {
         app.add_systems(
             FixedUpdate,
             (
+                handle_player_looking_at.in_set(GameLogic::Game),
                 apply_inputs.in_set(GameLogic::Game),
                 read_inputs.in_set(GameLogic::ReadInput),
                 broadcast_player_data.in_set(GameLogic::Sync),
@@ -154,21 +158,37 @@ pub fn broadcast_player_spawns(
 /// Sends a `PlayerPositionSync` to everyone player except the player whose position
 /// it is. Sends an `OwnedPlayerSync` to the player who owns the position.
 pub fn broadcast_player_data(
-    query: Query<(&NetworkObject, &Transform, &LastInputTracker, &Player), With<Player>>,
+    player_query: Query<(
+        &NetworkObject,
+        &Transform,
+        &LastInputTracker,
+        &Player,
+        Entity,
+    )>,
+    player_head_query: Query<(&Transform, &Parent), With<PlayerHead>>,
     client_netmap: Res<ClientNetworkObjectMap>,
     mut server: ResMut<RenetServer>,
     tick: Res<Tick>,
 ) {
-    for (obj, transform, input_tracker, player) in query.iter() {
+    for (obj, transform, input_tracker, player, player_entity) in player_query.iter() {
         let Some(client_id) = client_netmap.net_obj_to_client.get(obj) else {
             warn!("no client id for player obj in broadcast_player_data");
             continue;
         };
 
+        let mut head_rotation = 0.0;
+        for (head_t, head_parent) in player_head_query.iter() {
+            if head_parent.get() == player_entity {
+                head_rotation = utils::transform::get_head_rotation_yaw(head_t);
+            }
+        }
+
         let message = UnreliableMessageFromServer::PlayerPositionSync(PlayerPositionSync {
             net_obj: obj.clone(),
             translation: transform.translation.clone(),
             tick: tick.clone(),
+            body_rotation: utils::transform::get_body_rotation_pitch(transform),
+            head_rotation,
         });
         let bytes = bincode::serialize(&message).unwrap();
         server.broadcast_message_except(*client_id, DefaultChannel::Unreliable, bytes);
@@ -253,6 +273,36 @@ pub fn read_inputs(
     }
 
     inputs.prune(10);
+}
+
+pub fn handle_player_looking_at(
+    mut player_query: Query<
+        (&mut Transform, &NetworkObject, Entity),
+        (With<Player>, Without<PlayerHead>),
+    >,
+    mut player_head: Query<(&mut Transform, &Parent), With<PlayerHead>>,
+    reader: Res<server::MessageReaderOnServer>,
+    client_netmap: Res<ClientNetworkObjectMap>,
+) {
+    for (client_id, msg) in reader.unreliable_messages() {
+        if let UnreliableMessageFromClient::PlayerRotation(rotation) = msg {
+            if let Some(net_obj) = client_netmap.client_to_net_obj.get(client_id) {
+                for (mut transform, obj, player_entity) in player_query.iter_mut() {
+                    if obj != net_obj {
+                        continue;
+                    }
+                    utils::transform::set_body_rotation_pitch(&mut transform, rotation.body);
+                    for (mut head_t, head_parent) in player_head.iter_mut() {
+                        if head_parent.get() == player_entity {
+                            utils::transform::set_head_rotation_yaw(&mut head_t, rotation.head);
+                        }
+                    }
+                }
+            } else {
+                warn!("Unknown client_id: {}", client_id);
+            }
+        }
+    }
 }
 
 /// Informs the new player of all the currently spawned players whenever a

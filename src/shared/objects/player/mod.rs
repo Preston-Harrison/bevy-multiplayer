@@ -71,6 +71,10 @@ pub struct Player {
     pub kinematics: PlayerKinematics,
 }
 
+/// Represents where the head (or camera target, on the client) of the player is. Guns are children of this.
+#[derive(Component)]
+pub struct PlayerHead;
+
 impl Player {
     fn new() -> Self {
         Self {
@@ -218,9 +222,10 @@ pub fn spawn_player(
             entity.insert(LastInputTracker::default());
             entity.with_children(|parent| {
                 parent
-                    .spawn(SpatialBundle::from_transform(Transform::from_xyz(
-                        0.0, 0.5, 0.0,
-                    )))
+                    .spawn((
+                        PlayerHead,
+                        SpatialBundle::from_transform(Transform::from_xyz(0.0, 0.5, 0.0)),
+                    ))
                     .with_children(|parent| {
                         parent.spawn((SpatialBundle::default(), Gun::new(GunType::PurpleRifle)));
                     });

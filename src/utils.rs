@@ -109,3 +109,42 @@ pub mod freecam {
         }
     }
 }
+
+pub mod transform {
+    //! TODO: All chat gpt generated, need to check if accurate.
+    use bevy::prelude::*;
+
+    /// Gets the yaw (rotation about the Y-axis) from the transform's quaternion rotation.
+    ///
+    /// # Returns
+    /// The yaw angle (in radians) representing the horizontal rotation.
+    pub fn get_head_rotation_yaw(transform: &Transform) -> f32 {
+        let (_, yaw, _) = transform.rotation.to_euler(EulerRot::YXZ);
+        yaw
+    }
+
+    /// Gets the pitch (rotation about the X-axis) from the transform's quaternion rotation.
+    ///
+    /// # Returns
+    /// The pitch angle (in radians) representing the vertical rotation.
+    pub fn get_body_rotation_pitch(transform: &Transform) -> f32 {
+        let (pitch, _, _) = transform.rotation.to_euler(EulerRot::YXZ);
+        pitch
+    }
+
+    /// Sets the yaw (rotation about the Y-axis) in the transform's quaternion rotation.
+    ///
+    /// This function preserves the pitch and roll values while updating the yaw.
+    pub fn set_head_rotation_yaw(transform: &mut Transform, yaw: f32) {
+        let (pitch, _, roll) = transform.rotation.to_euler(EulerRot::YXZ);
+        transform.rotation = Quat::from_euler(EulerRot::YXZ, pitch, yaw, roll);
+    }
+
+    /// Sets the pitch (rotation about the X-axis) in the transform's quaternion rotation.
+    ///
+    /// This function preserves the yaw and roll values while updating the pitch.
+    pub fn set_body_rotation_pitch(transform: &mut Transform, pitch: f32) {
+        let (_, yaw, roll) = transform.rotation.to_euler(EulerRot::YXZ);
+        transform.rotation = Quat::from_euler(EulerRot::YXZ, pitch, yaw, roll);
+    }
+}

@@ -408,6 +408,7 @@ fn get_spawn_origin(context: &RapierContext, position: Vec2) -> Option<RayInters
         .map(|v| v.1)
 }
 
+/// FIXME: this panics sometimes for some reason.
 /// Spawns trees in newly generated chunks.
 pub fn tree_spawn_system(
     mut commands: Commands,

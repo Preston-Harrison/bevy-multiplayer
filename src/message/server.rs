@@ -51,6 +51,10 @@ pub enum ReliableMessageFromServer {
 pub struct PlayerPositionSync {
     pub net_obj: NetworkObject,
     pub translation: Vec3,
+    /// Euler radian rotation of player body about Vec3::Y
+    pub body_rotation: f32,
+    /// Euler radian rotation of player head about Vec3::X
+    pub head_rotation: f32,
     pub tick: Tick,
 }
 

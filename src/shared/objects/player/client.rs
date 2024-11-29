@@ -12,7 +12,9 @@ use bevy_renet::renet::{DefaultChannel, RenetClient};
 
 use crate::{
     message::{
-        client::{MessageReaderOnClient, OrderedInput, UnreliableMessageFromClient},
+        client::{
+            MessageReaderOnClient, OrderedInput, PlayerRotation, UnreliableMessageFromClient,
+        },
         server::{
             OwnedPlayerSync, PlayerPositionSync, ReliableMessageFromServer,
             UnreliableMessageFromServer,
@@ -20,16 +22,17 @@ use crate::{
         spawn::NetworkSpawn,
     },
     shared::{
-        console::ConsoleMessage,
         objects::{
             gizmo::spawn_raycast_visual,
             grounded::Grounded,
             gun::{Gun, GunType},
+            player::PlayerHead,
             LastSyncTracker, NetworkObject,
         },
         physics::apply_kinematics,
         GameLogic,
     },
+    utils,
 };
 
 use super::{
@@ -49,6 +52,7 @@ impl Plugin for PlayerClientPlugin {
                 read_input.in_set(GameLogic::ReadInput),
                 spawn_players.in_set(GameLogic::Spawn),
                 recv_position_sync.in_set(GameLogic::Sync),
+                sync_player_rotation.in_set(GameLogic::Sync),
                 recv_player_shot.in_set(GameLogic::Sync),
                 predict_movement.in_set(GameLogic::Game),
             ),
@@ -178,6 +182,7 @@ pub fn spawn_player_camera(mut commands: Commands, players: Query<Entity, Added<
     commands.entity(entity).with_children(|parent| {
         parent.spawn((
             PlayerCameraTarget,
+            PlayerHead,
             SpatialBundle::from_transform(Transform::from_xyz(0.0, 0.5, 0.0)),
         ));
     });
@@ -201,26 +206,34 @@ pub fn spawn_player_camera(mut commands: Commands, players: Query<Entity, Added<
 /// Rotates the player based on mouse movement.
 pub fn rotate_player(
     mut mouse_motion: EventReader<MouseMotion>,
-    mut player: Query<&mut Transform, (With<LocalPlayerTag>, Without<PlayerCameraTarget>)>,
-    mut camera: Query<&mut Transform, (With<PlayerCameraTarget>, Without<LocalPlayerTag>)>,
+    mut player: Query<(&mut Transform, Entity), (With<LocalPlayerTag>, Without<PlayerHead>)>,
+    mut player_head: Query<(&mut Transform, &Parent), With<PlayerHead>>,
     q_windows: Query<&Window, With<PrimaryWindow>>,
 ) {
     let primary_window = q_windows.single();
     if primary_window.cursor.grab_mode != CursorGrabMode::Locked {
         return;
     }
-    let Ok(mut transform) = player.get_single_mut() else {
+    let Ok((mut player_t, entity)) = player.get_single_mut() else {
         return;
     };
-    let Ok(mut camera) = camera.get_single_mut() else {
+    let mut player_head_t = None;
+    for (head_t, parent) in player_head.iter_mut() {
+        if parent.get() == entity {
+            player_head_t = Some(head_t);
+            break;
+        }
+    }
+    let Some(mut player_head_t) = player_head_t else {
         return;
     };
+
     for motion in mouse_motion.read() {
         let yaw = -motion.delta.x * 0.003;
         let pitch = -motion.delta.y * 0.002;
         // Order of rotations is important, see <https://gamedev.stackexchange.com/a/136175/103059>
-        transform.rotate_y(yaw);
-        camera.rotate_local_x(pitch);
+        player_t.rotate_y(yaw);
+        player_head_t.rotate_local_x(pitch);
     }
 }
 
@@ -445,18 +458,45 @@ fn get_shot(
 pub fn recv_player_shot(
     reader: Res<MessageReaderOnClient>,
     mut commands: Commands,
-    player_query: Query<(&NetworkObject, &Transform), With<Player>>,
+    player_query: Query<(&NetworkObject, Entity), With<Player>>,
+    player_head_query: Query<(&Parent, Entity), With<PlayerHead>>,
+    gun_query: Query<(&Parent, &Gun)>,
+    global_transform_query: Query<&GlobalTransform>,
     net_obj_query: Query<(&NetworkObject, &Transform)>,
 ) {
     for msg in reader.unreliable_messages() {
         let UnreliableMessageFromServer::PlayerShot(shooter, shot) = msg else {
             continue;
         };
-        let shooter_pos = player_query
-            .iter()
-            .find(|(obj, _)| *obj == shooter)
-            .map(|(_, t)| t);
+
+        // TODO: fix this hellish code
+        let mut shooter_pos = None;
+        for (net_obj, player_entity) in player_query.iter() {
+            if net_obj == shooter {
+                for (head_parent, head_entity) in player_head_query.iter() {
+                    if head_parent.get() == player_entity {
+                        for (gun_parent, gun) in gun_query.iter() {
+                            if gun_parent.get() == head_entity {
+                                if let Some(bullet_point) = gun.bullet_point {
+                                    shooter_pos = global_transform_query
+                                        .get(bullet_point)
+                                        .ok()
+                                        .map(|v| v.translation());
+                                    if shooter_pos.is_none() {
+                                        warn!("bullet point entity is in gun, but transform not found");
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
         let Some(shooter_pos) = shooter_pos else {
+            warn!("tried to shoot but no shooter position");
+            dbg!(player_query.iter().collect::<Vec<_>>());
+            dbg!(player_head_query.iter().collect::<Vec<_>>());
+            dbg!(gun_query.iter().collect::<Vec<_>>());
             continue;
         };
 
@@ -465,7 +505,7 @@ pub fn recv_player_shot(
                 Some(vector) => {
                     spawn_raycast_visual(
                         &mut commands,
-                        shooter_pos.translation,
+                        shooter_pos,
                         vector,
                         shot.vector.length(),
                         YELLOW_500,
@@ -484,10 +524,10 @@ pub fn recv_player_shot(
                     continue;
                 };
                 let target_shot_pos = target_pos.translation + shot.relative_position;
-                let ray = target_shot_pos - shooter_pos.translation;
+                let ray = target_shot_pos - shooter_pos;
                 spawn_raycast_visual(
                     &mut commands,
-                    shooter_pos.translation,
+                    shooter_pos,
                     ray.normalize(),
                     ray.length(),
                     GREEN_500,
@@ -528,9 +568,10 @@ pub fn spawn_players(
                     // Mimics structure of actual player, where the first parent
                     // is the player camera.
                     parent
-                        .spawn(SpatialBundle::from_transform(Transform::from_xyz(
-                            0.0, 0.5, 0.0,
-                        )))
+                        .spawn((
+                            PlayerHead,
+                            SpatialBundle::from_transform(Transform::from_xyz(0.0, 0.5, 0.0)),
+                        ))
                         .with_children(|parent| {
                             parent
                                 .spawn((SpatialBundle::default(), Gun::new(GunType::PurpleRifle)));
@@ -556,6 +597,7 @@ pub struct LocalPlayerQueryForSync {
 #[derive(QueryData)]
 #[query_data(mutable)]
 pub struct NonLocalPlayers {
+    entity: Entity,
     transform: &'static mut Transform,
     net_obj: &'static NetworkObject,
     last_sync_tracker: &'static mut LastSyncTracker<Transform>,
@@ -564,9 +606,10 @@ pub struct NonLocalPlayers {
 /// Receives player synchronization events. For `PlayerPositionSync`, this just
 /// sets the new position with `sync_nonlocal`. For `OwnedPlayerSync`, this performs
 /// rollback with `check_and_rollback`.
-pub fn recv_position_sync(
+fn recv_position_sync(
     reader: Res<MessageReaderOnClient>,
     mut nonlocal_players: Query<NonLocalPlayers, (With<Player>, Without<LocalPlayerTag>)>,
+    mut player_head_query: Query<(&mut Transform, &Parent), (With<PlayerHead>, Without<Player>)>,
     mut local_player: Query<LocalPlayerQueryForSync, LocalPlayerFilter>,
     ibuf: Res<InputBuffer>,
     mut history: ResMut<SnapshotHistory>,
@@ -576,7 +619,7 @@ pub fn recv_position_sync(
     for msg in reader.unreliable_messages() {
         match msg {
             UnreliableMessageFromServer::PlayerPositionSync(pos_sync) => {
-                sync_nonlocal(&mut nonlocal_players, pos_sync);
+                sync_nonlocal(&mut nonlocal_players, &mut player_head_query, pos_sync);
             }
             UnreliableMessageFromServer::OwnedPlayerSync(owned_sync) => {
                 let Ok(mut record) = local_player.get_single_mut() else {
@@ -603,6 +646,7 @@ pub fn recv_position_sync(
 /// Applies synchronization for non-local players.
 fn sync_nonlocal(
     nonlocal_players: &mut Query<NonLocalPlayers, (With<Player>, Without<LocalPlayerTag>)>,
+    player_head_query: &mut Query<(&mut Transform, &Parent), (With<PlayerHead>, Without<Player>)>,
     pos_sync: &PlayerPositionSync,
 ) {
     for mut player in nonlocal_players.iter_mut() {
@@ -611,6 +655,15 @@ fn sync_nonlocal(
         if is_same_player && is_most_recent {
             player.last_sync_tracker.last_tick = pos_sync.tick.clone();
             player.transform.translation = pos_sync.translation;
+            utils::transform::set_body_rotation_pitch(
+                &mut player.transform,
+                pos_sync.body_rotation,
+            );
+            for (mut head_t, head_parent) in player_head_query.iter_mut() {
+                if head_parent.get() == player.entity {
+                    utils::transform::set_head_rotation_yaw(&mut head_t, pos_sync.head_rotation);
+                }
+            }
         }
     }
 }
@@ -731,4 +784,26 @@ pub fn predict_movement(
         kinematics: local_player.player.kinematics.clone(),
     });
     snapshots.prune(100);
+}
+
+fn sync_player_rotation(
+    mut client: ResMut<RenetClient>,
+    player_query: Query<(Entity, &Transform), With<LocalPlayerTag>>,
+    player_head_query: Query<(&Transform, &Parent), With<PlayerHead>>,
+) {
+    let Ok((player_entity, player_t)) = player_query.get_single() else {
+        return;
+    };
+
+    for (head_t, head_parent) in player_head_query.iter() {
+        if head_parent.get() == player_entity {
+            let message = UnreliableMessageFromClient::PlayerRotation(PlayerRotation {
+                body: utils::transform::get_body_rotation_pitch(player_t),
+                head: utils::transform::get_head_rotation_yaw(head_t),
+            });
+            let bytes = bincode::serialize(&message).unwrap();
+            client.send_message(DefaultChannel::Unreliable, bytes);
+            break;
+        }
+    }
 }

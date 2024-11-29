@@ -8,7 +8,7 @@ impl Plugin for GunPlugin {
     }
 }
 
-#[derive(Component)]
+#[derive(Component, Debug)]
 pub struct Gun {
     pub gun_type: GunType,
     pub bullet_point: Option<Entity>,
@@ -23,6 +23,7 @@ impl Gun {
     }
 }
 
+#[derive(Debug)]
 pub enum GunType {
     PurpleRifle,
 }

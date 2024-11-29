@@ -103,8 +103,7 @@ fn read_messages_from_server(
     }
 
     while let Some(message) = client.receive_message(DefaultChannel::ReliableUnordered) {
-        if let Ok(parsed_message) = bincode::deserialize::<ReliableMessageFromServer>(&message)
-        {
+        if let Ok(parsed_message) = bincode::deserialize::<ReliableMessageFromServer>(&message) {
             match message_reader.latency {
                 Some(latency) => {
                     let delivery_time = current_time + latency;
@@ -128,9 +127,7 @@ fn read_messages_from_server(
         if should_drop(message_reader.message_loss) {
             continue;
         }
-        if let Ok(parsed_message) =
-            bincode::deserialize::<UnreliableMessageFromServer>(&message)
-        {
+        if let Ok(parsed_message) = bincode::deserialize::<UnreliableMessageFromServer>(&message) {
             match message_reader.latency {
                 Some(latency) => {
                     let delivery_time = current_time + latency;
@@ -169,7 +166,13 @@ pub struct OrderedInput {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub enum UnreliableMessageFromClient {
-    Input(OrderedInput),
+pub struct PlayerRotation {
+    pub body: f32,
+    pub head: f32,
 }
 
+#[derive(Serialize, Deserialize, Debug)]
+pub enum UnreliableMessageFromClient {
+    Input(OrderedInput),
+    PlayerRotation(PlayerRotation),
+}
