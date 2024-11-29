@@ -127,8 +127,3 @@ pub fn despawn_recursive_and_broadcast(
     server.broadcast_message(DefaultChannel::ReliableUnordered, bytes);
     commands.entity(entity).despawn_recursive();
 }
-
-pub enum SpawnMode<S, C> {
-    Server(S),
-    Client(C),
-}

@@ -3,24 +3,17 @@ use std::time::Duration;
 use bevy::prelude::*;
 use bevy_rapier3d::prelude::*;
 use serde::{Deserialize, Serialize};
+use spawn::{spawn_players_from_spawn_requests, PlayerSpawnRequest};
 
-use crate::shared::{
-    physics::char_ctrl_to_move_opts, proc::LoadsChunks, tick::Tick, GameLogic, SpawnMode,
-};
+use crate::shared::{physics::char_ctrl_to_move_opts, GameLogic};
 
-use self::{
-    client::PlayerClientPlugin,
-    server::{LastInputTracker, PlayerServerPlugin},
-};
+use self::{client::PlayerClientPlugin, server::PlayerServerPlugin};
 
-use super::{
-    grounded::Grounded,
-    gun::{Gun, GunType},
-    LastSyncTracker, NetworkObject,
-};
+use super::{grounded::Grounded, NetworkObject};
 
 pub mod client;
 pub mod server;
+pub mod spawn;
 
 pub struct PlayerPlugin {
     pub is_server: bool,
@@ -28,7 +21,14 @@ pub struct PlayerPlugin {
 
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(FixedUpdate, (tick_jump_cooldown.in_set(GameLogic::Start),));
+        app.add_event::<PlayerSpawnRequest>();
+        app.add_systems(
+            FixedUpdate,
+            (
+                spawn_players_from_spawn_requests.in_set(GameLogic::Spawn),
+                tick_jump_cooldown.in_set(GameLogic::Start),
+            ),
+        );
 
         if self.is_server {
             app.add_plugins(PlayerServerPlugin);
@@ -206,44 +206,5 @@ impl PlayerKinematics {
         }
 
         false // No differences found
-    }
-}
-
-pub fn spawn_player(
-    spawn_mode: SpawnMode<(), Tick>,
-    commands: &mut Commands,
-    transform: Transform,
-    net_obj: NetworkObject,
-) {
-    let mut entity = commands.spawn((
-        Player::new(),
-        KinematicCharacterController::default(),
-        RigidBody::KinematicPositionBased,
-        Collider::capsule_y(0.5, 0.25),
-        SpatialBundle::from_transform(transform),
-        Grounded::default(),
-        net_obj.clone(),
-        LoadsChunks,
-    ));
-
-    match spawn_mode {
-        SpawnMode::Server(_) => {
-            entity.insert(LastInputTracker::default());
-            entity.with_children(|parent| {
-                parent
-                    .spawn((
-                        PlayerHead,
-                        SpatialBundle::from_transform(Transform::from_xyz(0.0, 0.5, 0.0)),
-                    ))
-                    .with_children(|parent| {
-                        parent.spawn((SpatialBundle::default(), Gun::new(GunType::PurpleRifle)));
-                    });
-            });
-        }
-        SpawnMode::Client(tick) => {
-            entity
-                .insert(LocalPlayerTag)
-                .insert(LastSyncTracker::<Transform>::new(tick));
-        }
     }
 }

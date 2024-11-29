@@ -23,10 +23,7 @@ use crate::{
     },
     shared::{
         objects::{
-            gizmo::spawn_raycast_visual,
-            grounded::Grounded,
-            gun::{Gun, GunType},
-            player::PlayerHead,
+            gizmo::spawn_raycast_visual, grounded::Grounded, gun::Gun, player::PlayerHead,
             LastSyncTracker, NetworkObject,
         },
         physics::apply_kinematics,
@@ -36,8 +33,8 @@ use crate::{
 };
 
 use super::{
-    Input, LocalPlayer, LocalPlayerTag, Player, PlayerKinematics, Shot, ShotNothing, ShotPosition,
-    ShotTarget,
+    spawn::PlayerSpawnRequest, Input, LocalPlayer, LocalPlayerTag, Player, PlayerKinematics, Shot,
+    ShotNothing, ShotPosition, ShotTarget,
 };
 
 pub struct PlayerClientPlugin;
@@ -49,7 +46,6 @@ impl Plugin for PlayerClientPlugin {
         app.add_systems(
             FixedUpdate,
             (
-                spawn_player_camera,
                 read_input.in_set(GameLogic::ReadInput),
                 spawn_players.in_set(GameLogic::Spawn),
                 recv_position_sync.in_set(GameLogic::Sync),
@@ -172,37 +168,6 @@ pub struct PlayerCameraTarget;
 
 #[derive(Debug, Component)]
 pub struct PlayerCamera;
-
-/// Spawns a player camera when a local player is created.
-pub fn spawn_player_camera(mut commands: Commands, players: Query<Entity, Added<LocalPlayerTag>>) {
-    let Ok(entity) = players.get_single() else {
-        return;
-    };
-
-    println!("spawning player camera");
-    commands.entity(entity).with_children(|parent| {
-        parent.spawn((
-            PlayerCameraTarget,
-            PlayerHead,
-            SpatialBundle::from_transform(Transform::from_xyz(0.0, 0.5, 0.0)),
-        ));
-    });
-    commands
-        .spawn((
-            PlayerCamera,
-            Camera3dBundle {
-                projection: PerspectiveProjection {
-                    fov: 60.0_f32.to_radians(),
-                    ..default()
-                }
-                .into(),
-                ..default()
-            },
-        ))
-        .with_children(|parent| {
-            parent.spawn((SpatialBundle::default(), Gun::new(GunType::PurpleRifle)));
-        });
-}
 
 /// Rotates the player based on mouse movement.
 pub fn rotate_player(
@@ -554,9 +519,9 @@ pub fn recv_player_shot(
 
 /// Handles `Spawn` events from the server and spawns players.
 pub fn spawn_players(
-    mut commands: Commands,
     reader: Res<MessageReaderOnClient>,
     local_player: Res<LocalPlayer>,
+    mut player_spawn_requests: EventWriter<PlayerSpawnRequest>,
 ) {
     for msg in reader.reliable_messages() {
         let ReliableMessageFromServer::Spawn(spawn) = msg else {
@@ -566,31 +531,11 @@ pub fn spawn_players(
             continue;
         };
         if let NetworkSpawn::Player(transform) = spawn.net_spawn {
-            // BOOKMARK: player spawn
-            println!("spawning player");
-            commands
-                .spawn(Player::new())
-                .insert(LastSyncTracker::<Transform>::new(spawn.tick.clone()))
-                .insert((
-                    KinematicCharacterController::default(),
-                    RigidBody::KinematicPositionBased,
-                    Collider::capsule_y(0.5, 0.25),
-                    SpatialBundle::from_transform(transform),
-                ))
-                .insert(spawn.net_obj.clone())
-                .with_children(|parent| {
-                    // Mimics structure of actual player, where the first parent
-                    // is the player camera.
-                    parent
-                        .spawn((
-                            PlayerHead,
-                            SpatialBundle::from_transform(Transform::from_xyz(0.0, 0.5, 0.0)),
-                        ))
-                        .with_children(|parent| {
-                            parent
-                                .spawn((SpatialBundle::default(), Gun::new(GunType::PurpleRifle)));
-                        });
-                });
+            player_spawn_requests.send(PlayerSpawnRequest::Remote(
+                transform,
+                spawn.net_obj.clone(),
+                spawn.tick.clone(),
+            ));
         }
     }
 }

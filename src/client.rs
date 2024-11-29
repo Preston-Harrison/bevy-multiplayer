@@ -11,10 +11,10 @@ use std::time::SystemTime;
 use crate::message::client::{MessageReaderOnClient, ReliableMessageFromClient};
 use crate::message::server::ReliableMessageFromServer;
 use crate::message::MessagesAvailable;
+use crate::shared::objects::player::spawn::PlayerSpawnRequest;
 use crate::shared::objects::player::LocalPlayer;
 use crate::shared::tick::get_client_tick;
 use crate::shared::AppState;
-use crate::shared::SpawnMode;
 use crate::utils::toggle_cursor_grab_with_esc;
 use crate::{message, shared};
 
@@ -197,6 +197,7 @@ fn set_local_player(
     mut load_state: ResMut<NextState<LoadState>>,
     mut server_info: Local<ServerInfoReceived>,
     ui_camera: Query<Entity, With<UICamera>>,
+    mut player_spawn_reqs: EventWriter<PlayerSpawnRequest>,
 ) {
     let Some(mut client) = client else {
         return;
@@ -206,12 +207,11 @@ fn set_local_player(
             ReliableMessageFromServer::InitPlayer(player_info) => {
                 server_info.set_player_obj = true;
                 commands.insert_resource(LocalPlayer(player_info.net_obj.clone()));
-                shared::objects::player::spawn_player(
-                    SpawnMode::Client(player_info.tick.clone()),
-                    &mut commands,
+                player_spawn_reqs.send(PlayerSpawnRequest::Local(
                     player_info.transform,
                     player_info.net_obj.clone(),
-                );
+                    player_info.tick.clone(),
+                ));
             }
             ReliableMessageFromServer::TickSync(sync) => {
                 let tick = get_client_tick(sync.tick, sync.unix_millis);

@@ -13,18 +13,14 @@ use crate::{
     },
     server::{ClientNetworkObjectMap, PlayerNeedsInit, PlayerWantsUpdates},
     shared::{
-        objects::{
-            grounded::Grounded,
-            player::{spawn_player, Player},
-            NetworkObject,
-        },
+        objects::{grounded::Grounded, player::Player, NetworkObject},
         tick::Tick,
-        GameLogic, SpawnMode,
+        GameLogic,
     },
     utils,
 };
 
-use super::PlayerHead;
+use super::{spawn::PlayerSpawnRequest, PlayerHead};
 
 pub struct PlayerServerPlugin;
 
@@ -111,18 +107,13 @@ impl ClientInputs {
 /// Spawns a new player when a `PlayerNeedsInit` event is received.
 pub fn init_players(
     mut player_init: EventReader<PlayerNeedsInit>,
-    mut commands: Commands,
+    mut player_spawn_reqs: EventWriter<PlayerSpawnRequest>,
     mut server: ResMut<RenetServer>,
     tick: Res<Tick>,
 ) {
     for init in player_init.read() {
         let transform = Transform::from_xyz(0.0, 1.0, 0.0);
-        spawn_player(
-            SpawnMode::Server(()),
-            &mut commands,
-            transform,
-            init.net_obj.clone(),
-        );
+        player_spawn_reqs.send(PlayerSpawnRequest::Server(transform, init.net_obj.clone()));
 
         info!("sending player init");
         let message = ReliableMessageFromServer::InitPlayer(PlayerInit {
