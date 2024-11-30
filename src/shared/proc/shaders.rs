@@ -10,12 +10,13 @@ pub struct GrassDesert {
     pub grass: LinearRgba,
     #[uniform(1)]
     pub desert: LinearRgba,
-    #[texture(2, dimension = "2d_array")]
+
+    #[texture(2)]
     #[sampler(3)]
-    normal_map: Handle<Image>,
+    pub noise_texture: Handle<Image>,
 }
 
-impl MaterialExtension for GrassDesert {
+impl Material for GrassDesert {
     fn fragment_shader() -> ShaderRef {
         "shaders/grass_desert.wgsl".into()
     }

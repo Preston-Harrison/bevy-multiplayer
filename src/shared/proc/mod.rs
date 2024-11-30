@@ -1,20 +1,22 @@
 use std::f32::consts::PI;
 
 use bevy::{
-    color::palettes::css::BLUE,
+    color::palettes::css::{BLUE, GREEN, RED},
     math::Affine2,
     prelude::*,
     render::{
         mesh::{Indices, PrimitiveTopology},
         render_asset::RenderAssetUsages,
+        render_resource::{Extent3d, TextureDimension, TextureFormat},
         texture::{ImageAddressMode, ImageLoaderSettings, ImageSampler, ImageSamplerDescriptor},
     },
     utils::HashSet,
 };
 use bevy_inspector_egui::InspectorOptions;
 use bevy_rapier3d::prelude::*;
-use noise::{NoiseFn, Perlin};
+use noise::{NoiseFn, Perlin, Simplex};
 use rock::{Rock, RockPlugin};
+use shaders::GrassDesert;
 
 use self::tree::{Tree, TreePlugin};
 
@@ -30,6 +32,7 @@ impl Plugin for TerrainPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(FixedUpdate, (chunk_load_system, tree_spawn_system));
         app.add_plugins((TreePlugin, RockPlugin));
+        app.add_plugins(MaterialPlugin::<GrassDesert>::default());
     }
 }
 
@@ -66,6 +69,51 @@ struct NoiseMap {
     frequency: f64,
 }
 
+struct BiomeGenerator {
+    noise: Perlin,
+    frequency: f64,
+}
+
+impl BiomeGenerator {
+    fn get_noise(&self, chunk: IVec2, chunk_size: usize, x: usize, z: usize) -> f64 {
+        let sample_x = (chunk.x as f64 * chunk_size as f64 + x as f64) * self.frequency;
+        let sample_z = (chunk.y as f64 * chunk_size as f64 + z as f64) * self.frequency;
+        self.noise.get([sample_x, sample_z])
+    }
+
+    fn get(&self, chunk: IVec2, chunk_size: usize, x: usize, z: usize) -> Biome {
+        Biome::from_noise(self.get_noise(chunk, chunk_size, x, z))
+    }
+}
+
+enum Biome {
+    Desert(f32),
+    Forest(f32),
+}
+
+impl Biome {
+    fn from_noise(sample: f64) -> Self {
+        assert!(sample >= -1.0 || sample <= 1.0);
+
+        let mut normalized = sample;
+        if normalized < 0.4 {
+            normalized = 0.0;
+        } else if normalized > 0.6 {
+            normalized = 1.0;
+        } else {
+            normalized = (normalized - 0.4) * (1.0 / 0.2);
+        }
+        Self::Desert(normalized as f32)
+    }
+
+    fn get_vertex_color(&self) -> [f32; 4] {
+        match self {
+            Self::Desert(sample) => [*sample, 1.0 - sample, 0.0, 1.0],
+            Self::Forest(sample) => [1.0 - sample, *sample, 0.0, 1.0],
+        }
+    }
+}
+
 /// Represents a terrain chunk.
 #[derive(Resource)]
 pub struct Terrain {
@@ -76,17 +124,18 @@ pub struct Terrain {
     noise_layers: Vec<NoiseLayer>,
     tree_noise: NoiseMap,
     tree_spawn_threshold: f64,
-    materials: TerrainMaterials,
+    biome_generator: BiomeGenerator,
 }
 
 pub struct TerrainMaterials {
-    pub sand_dune: Handle<StandardMaterial>,
+    pub sand_dune: Handle<GrassDesert>,
 }
 
 impl Terrain {
     pub fn new_desert(
         asset_server: &AssetServer,
         materials: &mut Assets<StandardMaterial>,
+        grass_desert: &mut Assets<GrassDesert>,
     ) -> Self {
         let noise_layers = vec![
             NoiseLayer {
@@ -105,37 +154,33 @@ impl Terrain {
                 frequency: 0.02,
             },
         ];
-        let dune_texture = asset_server.load_with_settings("sand_dune_texture.png", |s: &mut _| {
-            *s = ImageLoaderSettings {
-                sampler: ImageSampler::Descriptor(ImageSamplerDescriptor {
-                    // rewriting mode to repeat image,
-                    address_mode_u: ImageAddressMode::Repeat,
-                    address_mode_v: ImageAddressMode::Repeat,
-                    ..default()
-                }),
-                ..default()
-            }
-        });
-        let terrain_materials = TerrainMaterials {
-            sand_dune: materials.add(StandardMaterial {
-                base_color: LinearRgba::new(1.0, 0.37, 0.1, 1.0).into(),
-                normal_map_texture: Some(dune_texture),
-                uv_transform: Affine2::from_scale(Vec2::new(100.0, 100.0)),
-                ..default()
-            }),
+        let biome_generator = BiomeGenerator {
+            noise: Perlin::new(3),
+            frequency: 0.0109,
         };
+        // let dune_texture = asset_server.load_with_settings("sand_dune_texture.png", |s: &mut _| {
+        //     *s = ImageLoaderSettings {
+        //         sampler: ImageSampler::Descriptor(ImageSamplerDescriptor {
+        //             // rewriting mode to repeat image,
+        //             address_mode_u: ImageAddressMode::Repeat,
+        //             address_mode_v: ImageAddressMode::Repeat,
+        //             ..default()
+        //         }),
+        //         ..default()
+        //     }
+        // });
         let tree_noise = NoiseMap {
             noise: Perlin::new(3),
             frequency: 0.01,
         };
         Self {
             chunk_size: 100,
-            radius: 1,
+            radius: 2,
             grid_spacing: 5,
             noise_layers,
             tree_noise,
             tree_spawn_threshold: 0.4,
-            materials: terrain_materials,
+            biome_generator,
         }
     }
 
@@ -221,6 +266,7 @@ impl Terrain {
         let grid_points = (self.chunk_size / (lod * self.grid_spacing)) + 1;
         let mut vertices = Vec::with_capacity(grid_points * grid_points);
         let mut uvs = Vec::with_capacity(grid_points * grid_points);
+        let mut colors: Vec<[f32; 4]> = Vec::with_capacity(grid_points * grid_points);
         let mut indices = Vec::new();
 
         // Generate vertices and heights
@@ -255,6 +301,14 @@ impl Terrain {
                 let u = x_pos / (self.chunk_size as f32);
                 let v = z_pos / (self.chunk_size as f32);
                 uvs.push([u, v]);
+
+                // colors.push(
+                //     self.biome_generator
+                //         .get(chunk_pos, grid_points, x, z)
+                //         .get_vertex_color(),
+                // );
+
+                colors.push([0.0, 0.0, 0.0, 1.0]);
             }
         }
 
@@ -282,6 +336,7 @@ impl Terrain {
             PrimitiveTopology::TriangleList,
             RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
         );
+        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
         mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, vertices);
         mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
         mesh.insert_indices(Indices::U32(indices));
@@ -343,13 +398,41 @@ impl Terrain {
         }
     }
 
+    fn get_biome_noise(&self, chunk_pos: IVec2) -> Image {
+        let perlin = Simplex::new(3);
+        let mut data = vec![0; 10_000];
+
+        for x in 0..100 {
+            for z in 0..100 {
+                let sample_x = (chunk_pos.x as f64 * 100.0 + x as f64) * 0.0159;
+                let sample_z = (chunk_pos.y as f64 * 100.0 + z as f64) * 0.0159;
+                data[x + 100 * z] = (perlin.get([sample_x, sample_z]) * 255.0)
+                    .clamp(0.0, 255.0) as u8;
+            }
+        }
+
+        Image::new(
+            Extent3d {
+                width: 100,
+                height: 100,
+                depth_or_array_layers: 1,
+            },
+            TextureDimension::D2,
+            data,
+            TextureFormat::R8Unorm,
+            RenderAssetUsages::default(),
+        )
+    }
+
     /// Renders the chunk into the Bevy world.
     fn render_chunk(
         &self,
         chunk: &Chunk,
         chunk_entity: Entity,
         commands: &mut Commands,
-        meshes: &mut ResMut<Assets<Mesh>>,
+        meshes: &mut Assets<Mesh>,
+        grass_desert: &mut Assets<GrassDesert>,
+        images: &mut Assets<Image>,
     ) {
         let mesh = self.generate_mesh(chunk.position, chunk.lod);
         let collider = Collider::from_bevy_mesh(&mesh, &ComputedColliderShape::TriMesh)
@@ -360,7 +443,11 @@ impl Terrain {
             parent.spawn((
                 MaterialMeshBundle {
                     mesh: mesh_handle,
-                    material: self.materials.sand_dune.clone(),
+                    material: grass_desert.add(GrassDesert {
+                        grass: GREEN.into(),
+                        desert: RED.into(),
+                        noise_texture: images.add(self.get_biome_noise(chunk.position)),
+                    }),
                     ..default()
                 },
                 collider,
@@ -446,6 +533,8 @@ pub fn chunk_load_system(
     mut commands: Commands,
     terrain: Option<Res<Terrain>>,
     mut meshes: ResMut<Assets<Mesh>>,
+    mut grass_desert: ResMut<Assets<GrassDesert>>,
+    mut images: ResMut<Assets<Image>>,
 ) {
     let Some(terrain) = terrain else {
         return;
@@ -477,7 +566,14 @@ pub fn chunk_load_system(
             lod: SERVER_LOD,
         };
         let entity = terrain.create_chunk(&chunk, &mut commands);
-        terrain.render_chunk(&chunk, entity, &mut commands, &mut meshes);
+        terrain.render_chunk(
+            &chunk,
+            entity,
+            &mut commands,
+            &mut meshes,
+            &mut grass_desert,
+            &mut images,
+        );
         trace!("rendered chunk {:?}", chunk);
     }
 }

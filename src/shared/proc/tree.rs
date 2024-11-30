@@ -11,42 +11,89 @@ impl Plugin for TreePlugin {
 }
 
 #[derive(Component)]
-pub struct Tree {}
+pub struct Tree {
+    tree_type: TreeType,
+}
 
 impl Tree {
     pub fn new() -> Self {
-        Self {}
+        Self {
+            tree_type: TreeType::Default,
+        }
+    }
+}
+
+pub enum TreeType {
+    Default,
+    Cone,
+    Fat,
+    Oak,
+    Simple,
+    Small,
+    Thin,
+    Plateau,
+    Detailed,
+}
+
+impl TreeType {
+    fn scene_path(&self) -> &'static str {
+        match self {
+            TreeType::Default => "kenny-nature/tree_default_dark.glb",
+            TreeType::Cone => "kenny-nature/tree_cone_dark.glb",
+            TreeType::Fat => "kenny-nature/tree_fat_dark.glb",
+            TreeType::Oak => "kenny-nature/tree_oak_dark.glb",
+            TreeType::Simple => "kenny-nature/tree_simple_dark.glb",
+            TreeType::Small => "kenny-nature/tree_small_dark.glb",
+            TreeType::Thin => "kenny-nature/tree_thin_dark.glb",
+            TreeType::Plateau => "kenny-nature/tree_plateau_dark.glb",
+            TreeType::Detailed => "kenny-natuer/tree_detailed_dark.glb",
+        }
+    }
+
+    fn to_mesh(&self, meshes: &mut TreeMeshes, asset_server: &AssetServer) -> Handle<Scene> {
+        let load_mesh =
+            || asset_server.load(GltfAssetLabel::Scene(0).from_asset(self.scene_path()));
+        let mesh_handle = match self {
+            Self::Default => &mut meshes.dark_default,
+            Self::Cone => &mut meshes.dark_cone,
+            Self::Fat => &mut meshes.dark_fat,
+            Self::Oak => &mut meshes.dark_oak,
+            Self::Simple => &mut meshes.dark_simple,
+            Self::Small => &mut meshes.dark_small,
+            Self::Thin => &mut meshes.dark_thin,
+            Self::Plateau => &mut meshes.dark_plateau,
+            Self::Detailed => &mut meshes.dark_detailed,
+        };
+        mesh_handle.get_or_insert_with(load_mesh).clone()
     }
 }
 
 #[derive(Resource, Default)]
 struct TreeMeshes {
-    fall_blocky: Option<Handle<Scene>>,
+    dark_default: Option<Handle<Scene>>,
+    dark_cone: Option<Handle<Scene>>,
+    dark_fat: Option<Handle<Scene>>,
+    dark_oak: Option<Handle<Scene>>,
+    dark_simple: Option<Handle<Scene>>,
+    dark_small: Option<Handle<Scene>>,
+    dark_thin: Option<Handle<Scene>>,
+    dark_plateau: Option<Handle<Scene>>,
+    dark_detailed: Option<Handle<Scene>>,
 }
 
 /// PERF: This can spawn alot of colliders, which slows the frame rate a little.
 /// Might be worth spawning colliders only while near the player.
 fn spawn_trees(
     mut tree_meshes: ResMut<TreeMeshes>,
-    new_trees: Query<Entity, Added<Tree>>,
+    new_trees: Query<(&Tree, Entity), Added<Tree>>,
     asset_server: Res<AssetServer>,
     mut commands: Commands,
 ) {
-    let tree_mesh = match &tree_meshes.fall_blocky {
-        Some(handle) => handle.clone(),
-        None => {
-            let handle =
-                asset_server.load(GltfAssetLabel::Scene(0).from_asset("tree_blocks_fall.glb"));
-            tree_meshes.fall_blocky = Some(handle.clone());
-            handle
-        }
-    };
-
-    for entity in new_trees.iter() {
+    for (tree, entity) in new_trees.iter() {
         if let Some(mut entity) = commands.get_entity(entity) {
             entity.with_children(|parent| {
                 parent.spawn(SceneBundle {
-                    scene: tree_mesh.clone(),
+                    scene: tree.tree_type.to_mesh(&mut tree_meshes, &asset_server),
                     ..Default::default()
                 });
                 parent.spawn((

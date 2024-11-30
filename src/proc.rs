@@ -8,6 +8,7 @@ use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, PrimaryWindow};
 use bevy_rapier3d::prelude::*;
 
+use crate::shared::proc::shaders::GrassDesert;
 use crate::shared::proc::{Chunk, LoadsChunks, Terrain, TerrainConfig, TerrainPlugin};
 use crate::utils::toggle_cursor_grab_with_esc;
 
@@ -29,6 +30,7 @@ pub fn run() {
         .register_type::<TerrainConfig>()
         // FixedPostUpdate is necessary as game logic runs in FixedUpdate
         .add_plugins(RapierPhysicsPlugin::<NoUserData>::default().in_schedule(FixedPostUpdate))
+        .add_plugins(RapierDebugRenderPlugin::default())
         .add_systems(Startup, setup)
         .add_systems(
             Update,
@@ -38,6 +40,7 @@ pub fn run() {
                 toggle_cursor_grab_with_esc,
                 draw_gizmos,
                 sync_terrain_config,
+                toggle_debug_ui,
             ),
         )
         .run();
@@ -49,9 +52,19 @@ struct FreeCamera {
     walk_speed: f32,
 }
 
+fn toggle_debug_ui(keys: Res<ButtonInput<KeyCode>>, mut config: ResMut<DebugRenderContext>) {
+    if keys.just_pressed(KeyCode::KeyO) {
+        config.enabled = true;
+    }
+    if keys.just_pressed(KeyCode::KeyI) {
+        config.enabled = false;
+    }
+}
+
 fn setup(
     mut commands: Commands,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut grass_desert: ResMut<Assets<GrassDesert>>,
     asset_server: Res<AssetServer>,
 ) {
     commands.insert_resource(TerrainConfig {
@@ -60,7 +73,7 @@ fn setup(
         tree_frequency: 0.05,
         tree_spawn_threshold: 0.3,
     });
-    let terrain = Terrain::new_desert(&asset_server, &mut materials);
+    let terrain = Terrain::new_desert(&asset_server, &mut materials, &mut grass_desert);
     commands.insert_resource(terrain);
 
     commands.spawn(DirectionalLightBundle {

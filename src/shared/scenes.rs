@@ -2,7 +2,7 @@ use std::f32::consts::PI;
 
 use bevy::{ecs::system::RunSystemOnce, prelude::*};
 
-use super::proc::Terrain;
+use super::proc::{shaders::GrassDesert, Terrain};
 
 pub fn setup_scene_1(world: &mut World) {
     world.run_system_once(spawn_world_model);
@@ -14,8 +14,9 @@ fn spawn_world_model(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut grass_desert: ResMut<Assets<GrassDesert>>,
 ) {
-    let terrain = Terrain::new_desert(&asset_server, &mut materials);
+    let terrain = Terrain::new_desert(&asset_server, &mut materials, &mut grass_desert);
     commands.insert_resource(terrain);
 }
 
