@@ -73,7 +73,7 @@ fn setup(
         tree_frequency: 0.05,
         tree_spawn_threshold: 0.3,
     });
-    let terrain = Terrain::new_desert(&asset_server, &mut materials, &mut grass_desert);
+    let terrain = Terrain::new_desert();
     commands.insert_resource(terrain);
 
     commands.spawn(DirectionalLightBundle {

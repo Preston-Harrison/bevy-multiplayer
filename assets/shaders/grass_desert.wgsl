@@ -14,7 +14,7 @@
 fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
 	// Perlin noise is stored in red channel.
 	let strength = textureSample(noise_texture, noise_sampler, mesh.uv).x;
-	let color = mix(grass, desert, strength);
+	let color = mix(grass, desert, 1.0 - strength);
 
 	var pbr_input = pbr_input_new();
     pbr_input.material.base_color = color;

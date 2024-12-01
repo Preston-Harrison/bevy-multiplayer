@@ -16,7 +16,7 @@ fn spawn_world_model(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut grass_desert: ResMut<Assets<GrassDesert>>,
 ) {
-    let terrain = Terrain::new_desert(&asset_server, &mut materials, &mut grass_desert);
+    let terrain = Terrain::new_desert();
     commands.insert_resource(terrain);
 }
 

@@ -2,6 +2,8 @@ use bevy::{
     prelude::*,
     window::{CursorGrabMode, PrimaryWindow},
 };
+use rand::Rng;
+use std::f64;
 
 pub fn toggle_cursor_grab_with_esc(
     keys: Res<ButtonInput<KeyCode>>,
@@ -149,4 +151,106 @@ pub mod transform {
         let (_, yaw, roll) = transform.rotation.to_euler(EulerRot::YXZ);
         transform.rotation = Quat::from_euler(EulerRot::YXZ, pitch, yaw, roll);
     }
+}
+
+/// Generates a set of points using Poisson disk sampling in 2D space.
+///
+/// # Parameters
+///
+/// - `width`: The width of the domain.
+/// - `height`: The height of the domain.
+/// - `min_distance`: The minimum distance between points.
+/// - `k`: The number of attempts for each active point (typically 30).
+/// - `rng`: A mutable reference to a random number generator.
+///
+/// # Returns
+///
+/// A vector of sampled points represented as `[f64; 2]` arrays.
+pub fn poisson_disk_sampling<R: Rng>(
+    width: f64,
+    height: f64,
+    min_distance: f64,
+    k: usize,
+    rng: &mut R,
+) -> Vec<[f64; 2]> {
+    // Compute cell size
+    let cell_size = min_distance / (2f64).sqrt();
+
+    // Compute grid dimensions
+    let grid_width = (width / cell_size).ceil() as usize;
+    let grid_height = (height / cell_size).ceil() as usize;
+
+    // Initialize grid with None
+    let mut grid: Vec<Vec<Option<[f64; 2]>>> = vec![vec![None; grid_height]; grid_width];
+
+    // Initialize sample list and active list
+    let mut samples = Vec::new();
+    let mut active_list = Vec::new();
+
+    // Pick an initial point
+    let initial_point = [rng.gen_range(0.0..width), rng.gen_range(0.0..height)];
+
+    // Add initial point to samples and active_list
+    samples.push(initial_point);
+    active_list.push(initial_point);
+
+    // Update grid
+    let grid_x = (initial_point[0] / cell_size).floor() as usize;
+    let grid_y = (initial_point[1] / cell_size).floor() as usize;
+    grid[grid_x][grid_y] = Some(initial_point);
+
+    // Main loop
+    while !active_list.is_empty() {
+        // Pick a random index from active_list
+        let idx = rng.gen_range(0..active_list.len());
+        let point = active_list[idx];
+        let mut found = false;
+        for _ in 0..k {
+            // Generate random point in annulus
+            let radius = rng.gen_range(min_distance..2.0 * min_distance);
+            let angle = rng.gen_range(0.0..2.0 * f64::consts::PI);
+            let new_x = point[0] + radius * angle.cos();
+            let new_y = point[1] + radius * angle.sin();
+            let new_point = [new_x, new_y];
+
+            // Check if new_point is within the domain
+            if new_x >= 0.0 && new_x < width && new_y >= 0.0 && new_y < height {
+                // Determine grid cell
+                let grid_x = (new_x / cell_size).floor() as isize;
+                let grid_y = (new_y / cell_size).floor() as isize;
+
+                // Check neighboring cells
+                let mut ok = true;
+                for i in (grid_x - 2).max(0)..=(grid_x + 2).min(grid_width as isize - 1) {
+                    for j in (grid_y - 2).max(0)..=(grid_y + 2).min(grid_height as isize - 1) {
+                        if let Some(other_point) = grid[i as usize][j as usize] {
+                            let dx = other_point[0] - new_x;
+                            let dy = other_point[1] - new_y;
+                            if dx * dx + dy * dy < min_distance * min_distance {
+                                ok = false;
+                                break;
+                            }
+                        }
+                    }
+                    if !ok {
+                        break;
+                    }
+                }
+                if ok {
+                    // Add new_point to samples and active_list
+                    samples.push(new_point);
+                    active_list.push(new_point);
+                    grid[grid_x as usize][grid_y as usize] = Some(new_point);
+                    found = true;
+                    break;
+                }
+            }
+        }
+        if !found {
+            // Remove point from active_list
+            active_list.swap_remove(idx);
+        }
+    }
+
+    samples
 }

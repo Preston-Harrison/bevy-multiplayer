@@ -21,6 +21,22 @@ impl Tree {
             tree_type: TreeType::Default,
         }
     }
+
+    pub fn rand(seed: u64) -> Self {
+        let tree_type = match seed % 9 {
+            0 => TreeType::Default,
+            1 => TreeType::Cone,
+            2 => TreeType::Fat,
+            3 => TreeType::Oak,
+            4 => TreeType::Simple,
+            5 => TreeType::Small,
+            6 => TreeType::Thin,
+            7 => TreeType::Plateau,
+            8 => TreeType::Detailed,
+            _ => panic!("seed mod 9 not < 8"),
+        };
+        Self { tree_type }
+    }
 }
 
 pub enum TreeType {
@@ -46,7 +62,7 @@ impl TreeType {
             TreeType::Small => "kenny-nature/tree_small_dark.glb",
             TreeType::Thin => "kenny-nature/tree_thin_dark.glb",
             TreeType::Plateau => "kenny-nature/tree_plateau_dark.glb",
-            TreeType::Detailed => "kenny-natuer/tree_detailed_dark.glb",
+            TreeType::Detailed => "kenny-nature/tree_detailed_dark.glb",
         }
     }
 
@@ -94,13 +110,14 @@ fn spawn_trees(
             entity.with_children(|parent| {
                 parent.spawn(SceneBundle {
                     scene: tree.tree_type.to_mesh(&mut tree_meshes, &asset_server),
+                    transform: Transform::default().with_scale(Vec3::splat(2.0)),
                     ..Default::default()
                 });
-                parent.spawn((
-                    RigidBody::Fixed,
-                    Collider::cylinder(0.5, 0.05),
-                    SpatialBundle::from_transform(Transform::from_xyz(0.0, 0.5, 0.0)),
-                ));
+                // parent.spawn((
+                //     RigidBody::Fixed,
+                //     Collider::cylinder(0.5, 0.05),
+                //     SpatialBundle::from_transform(Transform::from_xyz(0.0, 0.5, 0.0)),
+                // ));
             });
         }
     }

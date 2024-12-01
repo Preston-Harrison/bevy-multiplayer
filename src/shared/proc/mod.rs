@@ -2,27 +2,29 @@ use std::f32::consts::PI;
 
 use bevy::{
     color::palettes::css::{BLUE, GREEN, RED},
-    math::Affine2,
     prelude::*,
     render::{
         mesh::{Indices, PrimitiveTopology},
         render_asset::RenderAssetUsages,
         render_resource::{Extent3d, TextureDimension, TextureFormat},
-        texture::{ImageAddressMode, ImageLoaderSettings, ImageSampler, ImageSamplerDescriptor},
     },
     utils::HashSet,
 };
 use bevy_inspector_egui::InspectorOptions;
 use bevy_rapier3d::prelude::*;
+use biome::Biome;
 use noise::{NoiseFn, Perlin, Simplex};
-use rock::{Rock, RockPlugin};
+use rock::RockPlugin;
 use shaders::GrassDesert;
+use utils::ProcUtilsPlugin;
 
-use self::tree::{Tree, TreePlugin};
+use self::tree::TreePlugin;
 
+pub mod biome;
 pub mod rock;
 pub mod shaders;
 pub mod tree;
+pub mod utils;
 
 pub struct TerrainPlugin {
     pub is_server: bool,
@@ -30,8 +32,11 @@ pub struct TerrainPlugin {
 
 impl Plugin for TerrainPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(FixedUpdate, (chunk_load_system, tree_spawn_system));
-        app.add_plugins((TreePlugin, RockPlugin));
+        app.add_systems(
+            FixedUpdate,
+            (chunk_load_system, tree_spawn_system, biome::biome_system),
+        );
+        app.add_plugins((TreePlugin, RockPlugin, ProcUtilsPlugin));
         app.add_plugins(MaterialPlugin::<GrassDesert>::default());
     }
 }
@@ -69,51 +74,6 @@ struct NoiseMap {
     frequency: f64,
 }
 
-struct BiomeGenerator {
-    noise: Perlin,
-    frequency: f64,
-}
-
-impl BiomeGenerator {
-    fn get_noise(&self, chunk: IVec2, chunk_size: usize, x: usize, z: usize) -> f64 {
-        let sample_x = (chunk.x as f64 * chunk_size as f64 + x as f64) * self.frequency;
-        let sample_z = (chunk.y as f64 * chunk_size as f64 + z as f64) * self.frequency;
-        self.noise.get([sample_x, sample_z])
-    }
-
-    fn get(&self, chunk: IVec2, chunk_size: usize, x: usize, z: usize) -> Biome {
-        Biome::from_noise(self.get_noise(chunk, chunk_size, x, z))
-    }
-}
-
-enum Biome {
-    Desert(f32),
-    Forest(f32),
-}
-
-impl Biome {
-    fn from_noise(sample: f64) -> Self {
-        assert!(sample >= -1.0 || sample <= 1.0);
-
-        let mut normalized = sample;
-        if normalized < 0.4 {
-            normalized = 0.0;
-        } else if normalized > 0.6 {
-            normalized = 1.0;
-        } else {
-            normalized = (normalized - 0.4) * (1.0 / 0.2);
-        }
-        Self::Desert(normalized as f32)
-    }
-
-    fn get_vertex_color(&self) -> [f32; 4] {
-        match self {
-            Self::Desert(sample) => [*sample, 1.0 - sample, 0.0, 1.0],
-            Self::Forest(sample) => [1.0 - sample, *sample, 0.0, 1.0],
-        }
-    }
-}
-
 /// Represents a terrain chunk.
 #[derive(Resource)]
 pub struct Terrain {
@@ -122,9 +82,7 @@ pub struct Terrain {
     radius: i32,
     grid_spacing: usize,
     noise_layers: Vec<NoiseLayer>,
-    tree_noise: NoiseMap,
     tree_spawn_threshold: f64,
-    biome_generator: BiomeGenerator,
 }
 
 pub struct TerrainMaterials {
@@ -132,11 +90,7 @@ pub struct TerrainMaterials {
 }
 
 impl Terrain {
-    pub fn new_desert(
-        asset_server: &AssetServer,
-        materials: &mut Assets<StandardMaterial>,
-        grass_desert: &mut Assets<GrassDesert>,
-    ) -> Self {
+    pub fn new_desert() -> Self {
         let noise_layers = vec![
             NoiseLayer {
                 noise: Perlin::new(0),
@@ -154,33 +108,12 @@ impl Terrain {
                 frequency: 0.02,
             },
         ];
-        let biome_generator = BiomeGenerator {
-            noise: Perlin::new(3),
-            frequency: 0.0109,
-        };
-        // let dune_texture = asset_server.load_with_settings("sand_dune_texture.png", |s: &mut _| {
-        //     *s = ImageLoaderSettings {
-        //         sampler: ImageSampler::Descriptor(ImageSamplerDescriptor {
-        //             // rewriting mode to repeat image,
-        //             address_mode_u: ImageAddressMode::Repeat,
-        //             address_mode_v: ImageAddressMode::Repeat,
-        //             ..default()
-        //         }),
-        //         ..default()
-        //     }
-        // });
-        let tree_noise = NoiseMap {
-            noise: Perlin::new(3),
-            frequency: 0.01,
-        };
         Self {
             chunk_size: 100,
             radius: 2,
             grid_spacing: 5,
             noise_layers,
-            tree_noise,
             tree_spawn_threshold: 0.4,
-            biome_generator,
         }
     }
 
@@ -204,7 +137,6 @@ impl Terrain {
                 layer.amplitude = *freq;
             }
         }
-        self.tree_noise.frequency = config.tree_frequency;
         self.tree_spawn_threshold = config.tree_spawn_threshold;
     }
 
@@ -346,68 +278,16 @@ impl Terrain {
         mesh
     }
 
-    /// This requires the colldier mesh to already exist so the floor position
-    /// can be found.
-    /// TODO: have floor filter so raycasts only hit the floor.
-    fn spawn_trees_and_rocks(
-        &self,
-        commands: &mut Commands,
-        context: &RapierContext,
-        chunk: &Chunk,
-        chunk_entity: Entity,
-    ) {
-        if chunk.lod > 2 {
-            return;
-        }
-        let chunk_world_position = self.chunk_to_world_position(chunk.position, Vec3::ZERO);
-        let (grid, x_num, z_num) = self.generate_grid_points(chunk.position, chunk.lod);
-        for x in 0..x_num {
-            for z in 0..z_num {
-                let sample_pos = grid[x][z];
-                let sample_x = sample_pos.x as f64 * self.tree_noise.frequency;
-                let sample_z = sample_pos.y as f64 * self.tree_noise.frequency;
-                let noise = self.tree_noise.noise.get([sample_x, sample_z]);
-                if noise > self.tree_spawn_threshold {
-                    // Spawn tree here.
-                    // TODO: better algo than random in grid.
-                    match get_spawn_origin(context, grid[x][z]) {
-                        Some(intersect) => {
-                            commands.entity(chunk_entity).with_children(|parent| {
-                                let local_position = intersect.point - chunk_world_position;
-                                if x % 2 == 0 {
-                                    parent.spawn((
-                                        Tree::new(),
-                                        SpatialBundle::from_transform(Transform::from_translation(
-                                            local_position,
-                                        )),
-                                    ));
-                                } else {
-                                    parent.spawn((
-                                        Rock::new(),
-                                        SpatialBundle::from_transform(Transform::from_translation(
-                                            local_position,
-                                        )),
-                                    ));
-                                };
-                            });
-                        }
-                        None => info!("no origin"),
-                    }
-                }
-            }
-        }
-    }
-
     fn get_biome_noise(&self, chunk_pos: IVec2) -> Image {
         let perlin = Simplex::new(3);
         let mut data = vec![0; 10_000];
 
-        for x in 0..100 {
+        for x in 0..self.chunk_size {
             for z in 0..100 {
-                let sample_x = (chunk_pos.x as f64 * 100.0 + x as f64) * 0.0159;
-                let sample_z = (chunk_pos.y as f64 * 100.0 + z as f64) * 0.0159;
-                data[x + 100 * z] = (perlin.get([sample_x, sample_z]) * 255.0)
-                    .clamp(0.0, 255.0) as u8;
+                let sample_x = (chunk_pos.x as f64 * self.chunk_size as f64 + x as f64) * 0.0159;
+                let sample_z = (chunk_pos.y as f64 * self.chunk_size as f64 + z as f64) * 0.0159;
+                data[x + 100 * z] =
+                    (perlin.get([sample_x, sample_z]) * 255.0).clamp(0.0, 255.0) as u8;
             }
         }
 
@@ -438,22 +318,26 @@ impl Terrain {
         let collider = Collider::from_bevy_mesh(&mesh, &ComputedColliderShape::TriMesh)
             .expect("collider to be constructed");
         let mesh_handle = meshes.add(mesh);
+        let biome_noise = images.add(self.get_biome_noise(chunk.position));
 
-        commands.entity(chunk_entity).with_children(|parent| {
-            parent.spawn((
-                MaterialMeshBundle {
-                    mesh: mesh_handle,
-                    material: grass_desert.add(GrassDesert {
-                        grass: GREEN.into(),
-                        desert: RED.into(),
-                        noise_texture: images.add(self.get_biome_noise(chunk.position)),
-                    }),
-                    ..default()
-                },
-                collider,
-                RigidBody::Fixed,
-            ));
-        });
+        commands
+            .entity(chunk_entity)
+            .insert(Biome::new(biome_noise.clone()))
+            .with_children(|parent| {
+                parent.spawn((
+                    MaterialMeshBundle {
+                        mesh: mesh_handle,
+                        material: grass_desert.add(GrassDesert {
+                            grass: GREEN.into(),
+                            desert: RED.into(),
+                            noise_texture: biome_noise,
+                        }),
+                        ..default()
+                    },
+                    collider,
+                    RigidBody::Fixed,
+                ));
+            });
     }
 
     /// Creates a chunk parent entity and returns it's entity ID.
@@ -488,13 +372,6 @@ fn generate_chunks_around(position: IVec2, radius: i32) -> Vec<(IVec2, i32)> {
     result
 }
 
-fn get_spawn_origin(context: &RapierContext, position: Vec2) -> Option<RayIntersection> {
-    let start = Vec3::new(position.x, 100.0, position.y);
-    context
-        .cast_ray_and_get_normal(start, -Vec3::Y, 150.0, false, QueryFilter::default())
-        .map(|v| v.1)
-}
-
 /// FIXME: this panics sometimes for some reason.
 /// Spawns trees in newly generated chunks.
 pub fn tree_spawn_system(
@@ -515,7 +392,7 @@ pub fn tree_spawn_system(
             continue;
         }
         trace!("spawning trees for {:?}", chunk);
-        terrain.spawn_trees_and_rocks(&mut commands, &context, chunk, entity);
+        // terrain.spawn_trees_and_rocks(&mut commands, &context, chunk, entity);
     }
 }
 
