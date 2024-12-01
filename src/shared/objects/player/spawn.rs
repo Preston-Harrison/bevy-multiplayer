@@ -8,7 +8,7 @@ use crate::shared::{
         health::Health,
         LastSyncTracker, NetworkObject,
     },
-    proc::LoadsChunks,
+    proc::{utils::SnapToFloor, LoadsChunks},
     render::{DEFAULT_CAMERA_ORDER, DEFAULT_RENDER_LAYER},
     tick::Tick,
 };
@@ -72,6 +72,7 @@ const PLAYER_HEALTH: f32 = 100.0;
 pub fn spawn_players_from_spawn_requests(
     mut visual_handles: Local<PlayerVisualHandles>,
     mut player_spawn_reqs: EventReader<PlayerSpawnRequest>,
+    mut snap_to_floor: EventWriter<SnapToFloor>,
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -79,7 +80,7 @@ pub fn spawn_players_from_spawn_requests(
     for req in player_spawn_reqs.read() {
         match req {
             PlayerSpawnRequest::Server(transform, net_obj) => {
-                commands
+                let entity = commands
                     .spawn((
                         Player::new(),
                         PlayerPhysicsBundle::default(),
@@ -90,6 +91,7 @@ pub fn spawn_players_from_spawn_requests(
                         Health::new(PLAYER_HEALTH),
                     ))
                     .insert(SpatialBundle::from_transform(*transform))
+                    .insert(Visibility::Hidden)
                     .insert(LastInputTracker::default())
                     .with_children(|parent| {
                         parent
@@ -103,7 +105,9 @@ pub fn spawn_players_from_spawn_requests(
                                     Gun::new(GunType::PurpleRifle),
                                 ));
                             });
-                    });
+                    })
+                    .id();
+                snap_to_floor.send(SnapToFloor::new(entity).set_visible());
             }
             PlayerSpawnRequest::Local(transform, net_obj, tick) => {
                 commands

@@ -76,6 +76,10 @@ impl TreeType {
         };
         mesh_handle.get_or_insert_with(load_mesh).clone()
     }
+
+    fn get_collider(&self) -> Collider {
+        Collider::cylinder(2.0, 0.2)
+    }
 }
 
 #[derive(Resource, Default)]
@@ -109,7 +113,7 @@ fn spawn_trees(
                 });
                 parent.spawn((
                     RigidBody::Fixed,
-                    Collider::cylinder(2.0, 0.2),
+                    tree.tree_type.get_collider(),
                     SpatialBundle::from_transform(Transform::from_xyz(0.0, 0.5, 0.0)),
                 ));
             });

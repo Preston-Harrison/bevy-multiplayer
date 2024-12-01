@@ -55,13 +55,9 @@ pub fn biome_system(
     mut commands: Commands,
     mut query: Query<(&mut Biome, Entity)>,
     images: Res<Assets<Image>>,
-    terrain: Option<Res<Terrain>>,
+    terrain: Res<Terrain>,
     mut snap_to_floor: EventWriter<SnapToFloor>,
 ) {
-    let Some(terrain) = terrain else {
-        return;
-    };
-
     for (mut biome, entity) in query.iter_mut() {
         if biome.trees_loaded {
             continue;
@@ -95,7 +91,7 @@ pub fn biome_system(
                     .with_rotation(rotation);
                 let tree = parent
                     .spawn((
-                        Tree::rand(coords_to_u64(position)),
+                        Tree::rand(utils::coords_to_u64(position)),
                         SpatialBundle {
                             transform,
                             visibility: Visibility::Hidden,
@@ -103,7 +99,7 @@ pub fn biome_system(
                         },
                     ))
                     .id();
-                snap_to_floor.send(SnapToFloor::new(tree).set_visible());
+                snap_to_floor.send(SnapToFloor::new(tree).set_visible().with_offset(-1.5));
             });
         }
     }
@@ -126,16 +122,4 @@ fn get_tree_positions<R: Rng>(params: Params<R>) -> Vec<Vec2> {
         })
         .map(|point| Vec2::new(point[0] as f32, point[1] as f32))
         .collect()
-}
-
-// Basically a bad hash.
-fn coords_to_u64(position: Vec2) -> u64 {
-    let x = position.x;
-    let y = position.y;
-    let scale = 1_000_000.0; // Adjust scale for precision
-    let ix = (x * scale) as i32;
-    let iy = (y * scale) as i32;
-    let ux = (ix as u64) + 0x8000_0000; // Offset to handle negatives
-    let uy = (iy as u64) + 0x8000_0000;
-    (ux << 32) | uy
 }

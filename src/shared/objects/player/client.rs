@@ -1,7 +1,6 @@
 use std::collections::VecDeque;
 
 use bevy::{
-    color::palettes::tailwind::{GREEN_500, YELLOW_500},
     ecs::query::{QueryData, QueryFilter as ECSQueryFilter},
     input::mouse::MouseMotion,
     prelude::*,
@@ -23,7 +22,7 @@ use crate::{
     },
     shared::{
         objects::{
-            gizmo::spawn_raycast_visual,
+            gizmo::spawn_bullet_tracer,
             grounded::Grounded,
             gun::{Gun, GunType, LocalPlayerGun},
             player::PlayerHead,
@@ -392,14 +391,7 @@ fn get_shot(
     );
     let shot_type = match raycast {
         Some((entity, toi)) => {
-            spawn_raycast_visual(
-                commands,
-                bullet_ray_pos,
-                bullet_ray_dir,
-                toi,
-                GREEN_500,
-                2000,
-            );
+            spawn_bullet_tracer(commands, bullet_ray_pos, bullet_ray_dir, toi, true);
             let impact_point = bullet_ray_pos + (bullet_ray_dir * toi);
             match net_objs.get(entity).ok() {
                 Some((obj, transform)) => {
@@ -415,13 +407,12 @@ fn get_shot(
             }
         }
         None => {
-            spawn_raycast_visual(
+            spawn_bullet_tracer(
                 commands,
                 bullet_ray_pos,
                 bullet_ray_dir,
                 bullet_range,
-                YELLOW_500,
-                2000,
+                false,
             );
             Some(ShotType::ShotNothing(ShotNothing {
                 vector: bullet_ray_dir * bullet_range,
@@ -483,24 +474,22 @@ pub fn recv_player_shot(
         match &shot.shot_type {
             ShotType::ShotNothing(shot) => match shot.vector.try_normalize() {
                 Some(vector) => {
-                    spawn_raycast_visual(
+                    spawn_bullet_tracer(
                         &mut commands,
                         shooter_pos,
                         vector,
                         shot.vector.length(),
-                        YELLOW_500,
-                        2000,
+                        false,
                     );
                 }
                 _ => warn!("got zero valued shot vector"),
             },
-            ShotType::ShotPosition(shot) => spawn_raycast_visual(
+            ShotType::ShotPosition(shot) => spawn_bullet_tracer(
                 &mut commands,
                 shooter_pos,
                 -shooter_pos + shot.position,
                 (-shooter_pos + shot.position).length(),
-                GREEN_500,
-                2000,
+                true,
             ),
             ShotType::ShotTarget(shot) => {
                 let target_pos = net_obj_query
@@ -513,13 +502,12 @@ pub fn recv_player_shot(
                 };
                 let target_shot_pos = target_pos.translation + shot.relative_position;
                 let ray = target_shot_pos - shooter_pos;
-                spawn_raycast_visual(
+                spawn_bullet_tracer(
                     &mut commands,
                     shooter_pos,
                     ray.normalize(),
                     ray.length(),
-                    GREEN_500,
-                    2000,
+                    true,
                 );
             }
         }

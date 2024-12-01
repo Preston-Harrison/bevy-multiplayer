@@ -1,6 +1,7 @@
 use bevy::{ecs::query::QueryData, prelude::*, utils::HashMap};
 use bevy_rapier3d::prelude::*;
 use bevy_renet::renet::{ClientId, DefaultChannel, RenetServer};
+use rand::Rng;
 
 use crate::{
     message::{
@@ -112,7 +113,9 @@ pub fn init_players(
     tick: Res<Tick>,
 ) {
     for init in player_init.read() {
-        let transform = Transform::from_xyz(0.0, 1.0, 0.0);
+        let mut rng = rand::thread_rng();
+        let transform =
+            Transform::from_xyz(rng.gen_range(-30.0..30.0), 0.0, rng.gen_range(-30.0..30.0));
         player_spawn_reqs.send(PlayerSpawnRequest::Server(transform, init.net_obj.clone()));
 
         info!("sending player init");

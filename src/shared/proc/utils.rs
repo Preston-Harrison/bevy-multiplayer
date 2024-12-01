@@ -18,7 +18,8 @@ fn run_stuff(world: &mut World) {
 #[derive(Event)]
 pub struct SnapToFloor {
     pub entity_to_move: Entity,
-    pub set_visible: bool,
+    set_visible: bool,
+    y_offset: f32,
 }
 
 impl SnapToFloor {
@@ -26,11 +27,17 @@ impl SnapToFloor {
         Self {
             entity_to_move,
             set_visible: false,
+            y_offset: 0.0,
         }
     }
 
     pub fn set_visible(mut self) -> Self {
         self.set_visible = true;
+        self
+    }
+
+    pub fn with_offset(mut self, y_offset: f32) -> Self {
+        self.y_offset = y_offset;
         self
     }
 }
@@ -70,6 +77,7 @@ fn snap_to_floor(
 
         let diff = -global_pos + intersect.point;
         t.translation += diff;
+        t.translation += Vec3::Y + event.y_offset;
     }
 
     events.send_batch(to_add);

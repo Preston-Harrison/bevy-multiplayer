@@ -24,11 +24,18 @@ pub mod shaders;
 pub mod tree;
 pub mod utils;
 
+pub fn terrain_loaded(terrain: Option<Res<Terrain>>) -> bool {
+    terrain.is_some()
+}
+
 pub struct TerrainPlugin;
 
 impl Plugin for TerrainPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(FixedUpdate, (chunk_load_system, biome::biome_system));
+        app.add_systems(
+            FixedUpdate,
+            (chunk_load_system, biome::biome_system).run_if(terrain_loaded),
+        );
         app.add_plugins((TreePlugin, ProcUtilsPlugin));
         app.add_plugins(MaterialPlugin::<GrassDesert>::default());
     }
@@ -348,15 +355,11 @@ pub fn chunk_load_system(
     loaders: Query<&Transform, With<LoadsChunks>>,
     chunks: Query<(Entity, &Chunk)>,
     mut commands: Commands,
-    terrain: Option<Res<Terrain>>,
+    terrain: Res<Terrain>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut grass_desert: ResMut<Assets<GrassDesert>>,
     mut images: ResMut<Assets<Image>>,
 ) {
-    let Some(terrain) = terrain else {
-        return;
-    };
-
     let mut chunks_with_loaders: HashSet<IVec2> = HashSet::new();
     for transform in loaders.iter() {
         let chunk = terrain.world_position_to_chunk(transform.translation);

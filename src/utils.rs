@@ -260,3 +260,15 @@ pub fn poisson_disk_sampling<R: Rng>(
 pub fn create_rng_from_seed(seed: [u8; 32]) -> impl Rng {
     ChaCha20Rng::from_seed(seed)
 }
+
+/// Basically a bad hash.
+pub fn coords_to_u64(position: Vec2) -> u64 {
+    let x = position.x;
+    let y = position.y;
+    let scale = 1_000_000.0; // Adjust scale for precision
+    let ix = (x * scale) as i32;
+    let iy = (y * scale) as i32;
+    let ux = (ix as u64) + 0x8000_0000; // Offset to handle negatives
+    let uy = (iy as u64) + 0x8000_0000;
+    (ux << 32) | uy
+}

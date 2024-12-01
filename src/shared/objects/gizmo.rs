@@ -1,6 +1,9 @@
 use std::time::Duration;
 
-use bevy::prelude::*;
+use bevy::{
+    color::palettes::css::{GREEN, YELLOW},
+    prelude::*,
+};
 
 pub struct GizmoPlugin;
 
@@ -16,6 +19,7 @@ pub struct RaycastVisual {
     from: Vec3,
     to: Vec3,
     color: Color,
+    is_arrow: bool,
 }
 
 fn draw_raycast(
@@ -29,25 +33,29 @@ fn draw_raycast(
         if ray.despawn_timer.just_finished() {
             commands.entity(entity).despawn();
         } else {
-            gizmos.arrow(ray.from, ray.to, ray.color);
+            if ray.is_arrow {
+                gizmos.arrow(ray.from, ray.to, ray.color);
+            } else {
+                gizmos.line(ray.from, ray.to, ray.color);
+            }
         }
     }
 }
 
-pub fn spawn_raycast_visual(
+pub fn spawn_bullet_tracer(
     commands: &mut Commands,
     ray_pos: Vec3,
     ray_dir: Vec3,
     length: f32,
-    color: impl Into<Color>,
-    millis: u64,
+    hit: bool,
 ) {
     let to = ray_pos + (ray_dir * length);
     let cast = RaycastVisual {
-        despawn_timer: Timer::new(Duration::from_millis(millis), TimerMode::Once),
+        despawn_timer: Timer::new(Duration::from_millis(100), TimerMode::Once),
         from: ray_pos,
+        is_arrow: false,
         to,
-        color: color.into(),
+        color: if hit { GREEN.into() } else { YELLOW.into() },
     };
     commands.spawn(cast);
 }
