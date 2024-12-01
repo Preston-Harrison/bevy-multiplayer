@@ -2,7 +2,7 @@ use std::f32::consts::PI;
 
 use bevy::{ecs::system::RunSystemOnce, prelude::*};
 
-use super::proc::Terrain;
+use super::proc::grassy_desert::GrassyDesertTerrain;
 
 pub fn setup_scene_1(world: &mut World) {
     world.run_system_once(spawn_world_model);
@@ -10,7 +10,7 @@ pub fn setup_scene_1(world: &mut World) {
 }
 
 fn spawn_world_model(mut commands: Commands) {
-    commands.insert_resource(Terrain::new_desert());
+    commands.insert_resource(GrassyDesertTerrain::new());
 }
 
 fn spawn_lights(mut commands: Commands) {

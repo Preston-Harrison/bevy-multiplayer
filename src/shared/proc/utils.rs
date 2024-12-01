@@ -82,3 +82,29 @@ fn snap_to_floor(
 
     events.send_batch(to_add);
 }
+
+/// Includes center position with distance = 0. Returns Vec<(position, distance)>.
+pub fn generate_chunks_around(position: IVec2, radius: i32) -> Vec<(IVec2, i32)> {
+    let mut result = Vec::new();
+
+    // Iterate over the square area around the center position
+    for x in -radius..=radius {
+        for y in -radius..=radius {
+            let offset = IVec2::new(x, y);
+            let chunk_position = position + offset;
+
+            // Calculate Chebyshev distance (diagonals count as 1)
+            let distance = x.abs().max(y.abs());
+
+            result.push((chunk_position, distance));
+        }
+    }
+
+    result
+}
+
+pub struct NoiseLayer<N> {
+    pub noise: N,
+    pub amplitude: f64,
+    pub frequency: f64,
+}

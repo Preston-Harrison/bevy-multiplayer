@@ -1,14 +1,14 @@
 use std::f32::consts::PI;
 
-use bevy::color::palettes::css::BLUE;
-use bevy::color::palettes::tailwind::RED_500;
 use bevy::dev_tools::fps_overlay::{FpsOverlayConfig, FpsOverlayPlugin};
 use bevy::input::mouse::MouseMotion;
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, PrimaryWindow};
 use bevy_rapier3d::prelude::*;
 
-use crate::shared::proc::{Chunk, LoadsChunks, Terrain, TerrainConfig, TerrainPlugin};
+use crate::shared::proc::chunk::Chunk;
+use crate::shared::proc::grassy_desert::{GrassyDesertBiomeData, GrassyDesertTerrain};
+use crate::shared::proc::{LoadsChunks, TerrainPlugin};
 use crate::utils::toggle_cursor_grab_with_esc;
 
 pub fn run() {
@@ -26,7 +26,6 @@ pub fn run() {
                 },
             },
         ))
-        .register_type::<TerrainConfig>()
         // FixedPostUpdate is necessary as game logic runs in FixedUpdate
         .add_plugins(RapierPhysicsPlugin::<NoUserData>::default().in_schedule(FixedPostUpdate))
         .add_plugins(RapierDebugRenderPlugin::default())
@@ -39,7 +38,6 @@ pub fn run() {
                 mouse_look,
                 toggle_cursor_grab_with_esc,
                 draw_gizmos,
-                sync_terrain_config,
                 toggle_debug_ui,
             ),
         )
@@ -70,13 +68,7 @@ fn toggle_debug_ui(
 }
 
 fn setup(mut commands: Commands) {
-    commands.insert_resource(TerrainConfig {
-        terrain_frequency: vec![0.005, 0.01, 0.02],
-        terrain_amplitude: vec![15.0, 5.0, 0.5],
-        tree_frequency: 0.05,
-        tree_spawn_threshold: 0.3,
-    });
-    let terrain = Terrain::new_desert();
+    let terrain = GrassyDesertTerrain::new();
     commands.insert_resource(terrain);
 
     commands.spawn(DirectionalLightBundle {
@@ -121,19 +113,16 @@ fn setup(mut commands: Commands) {
 
 fn draw_gizmos(
     mut gizmos: Gizmos,
-    query: Query<&Chunk>,
-    terrain: Res<Terrain>,
+    query: Query<&Chunk<GrassyDesertBiomeData>>,
+    terrain: Res<GrassyDesertTerrain>,
     debug: Res<DebugGizmos>,
 ) {
     if !debug.0 {
         return;
     }
-    gizmos.arrow(Vec3::new(0.0, 0.0, 0.0), Vec3::new(20.0, 0.0, 0.0), BLUE);
-    gizmos.arrow(Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 20.0), RED_500);
-    gizmos.sphere(Vec3::new(0.0, 1.0, 0.0), Quat::IDENTITY, 1.0, BLUE);
 
-    for tag in query.iter() {
-        terrain.draw_chunk_gizmo(&mut gizmos, tag.position);
+    for chunk in query.iter() {
+        terrain.draw_chunk_gizmo(&mut gizmos, chunk.meta.position);
     }
 }
 
@@ -213,11 +202,4 @@ fn mouse_look(
         camera.rotate_y(yaw);
         camera.rotate_local_x(pitch);
     }
-}
-
-fn sync_terrain_config(mut terrain: ResMut<Terrain>, config: Option<Res<TerrainConfig>>) {
-    let Some(config) = config else {
-        return;
-    };
-    terrain.update_config(&config);
 }

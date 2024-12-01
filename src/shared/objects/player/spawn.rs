@@ -107,7 +107,7 @@ pub fn spawn_players_from_spawn_requests(
                             });
                     })
                     .id();
-                snap_to_floor.send(SnapToFloor::new(entity).set_visible());
+                snap_to_floor.send(SnapToFloor::new(entity).set_visible().with_offset(1.0));
             }
             PlayerSpawnRequest::Local(transform, net_obj, tick) => {
                 commands
