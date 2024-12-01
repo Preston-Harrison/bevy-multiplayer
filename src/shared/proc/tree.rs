@@ -110,7 +110,7 @@ fn spawn_trees(
             entity.with_children(|parent| {
                 parent.spawn(SceneBundle {
                     scene: tree.tree_type.to_mesh(&mut tree_meshes, &asset_server),
-                    transform: Transform::default().with_scale(Vec3::splat(2.0)),
+                    transform: Transform::default().with_scale(Vec3::splat(4.0)),
                     ..Default::default()
                 });
                 // parent.spawn((

@@ -31,6 +31,7 @@ pub fn run() {
         // FixedPostUpdate is necessary as game logic runs in FixedUpdate
         .add_plugins(RapierPhysicsPlugin::<NoUserData>::default().in_schedule(FixedPostUpdate))
         .add_plugins(RapierDebugRenderPlugin::default())
+        .init_resource::<DebugGizmos>()
         .add_systems(Startup, setup)
         .add_systems(
             Update,
@@ -52,13 +53,21 @@ struct FreeCamera {
     walk_speed: f32,
 }
 
-fn toggle_debug_ui(keys: Res<ButtonInput<KeyCode>>, mut config: ResMut<DebugRenderContext>) {
+#[derive(Resource, Default)]
+struct DebugGizmos(bool);
+
+fn toggle_debug_ui(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut config: ResMut<DebugRenderContext>,
+    mut debug_gizmos: ResMut<DebugGizmos>,
+) {
     if keys.just_pressed(KeyCode::KeyO) {
-        config.enabled = true;
+        debug_gizmos.0 = true;
     }
     if keys.just_pressed(KeyCode::KeyI) {
-        config.enabled = false;
+        debug_gizmos.0 = false;
     }
+    config.enabled = debug_gizmos.0;
 }
 
 fn setup(
@@ -116,7 +125,15 @@ fn setup(
         });
 }
 
-fn draw_gizmos(mut gizmos: Gizmos, query: Query<&Chunk>, terrain: Res<Terrain>) {
+fn draw_gizmos(
+    mut gizmos: Gizmos,
+    query: Query<&Chunk>,
+    terrain: Res<Terrain>,
+    debug: Res<DebugGizmos>,
+) {
+    if !debug.0 {
+        return;
+    }
     gizmos.arrow(Vec3::new(0.0, 0.0, 0.0), Vec3::new(20.0, 0.0, 0.0), BLUE);
     gizmos.arrow(Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 20.0), RED_500);
     gizmos.sphere(Vec3::new(0.0, 1.0, 0.0), Quat::IDENTITY, 1.0, BLUE);

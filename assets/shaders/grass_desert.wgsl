@@ -12,7 +12,7 @@
 
 @fragment
 fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
-	// Perlin noise is stored in red channel.
+	// Perlin noise is stored in red channel, (RGBA -> XYZW, R = X).
 	let strength = textureSample(noise_texture, noise_sampler, mesh.uv).x;
 	let color = mix(grass, desert, 1.0 - strength);
 

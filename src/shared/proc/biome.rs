@@ -1,4 +1,7 @@
+use std::f32::consts::FRAC_2_PI;
+
 use bevy::{color::palettes::css::GREEN, prelude::*};
+use rand::Rng;
 
 use crate::utils;
 
@@ -19,11 +22,12 @@ impl Biome {
     }
 }
 
-struct Params<'a> {
+struct Params<'a, 'b, R: Rng> {
     width: usize,
     height: usize,
     noise: &'a [u8],
     min_radius: f64,
+    rng: &'b mut R,
 }
 
 #[derive(Component)]
@@ -47,17 +51,20 @@ pub fn biome_system(
         };
         biome.trees_loaded = true;
 
+        let mut rng = rand::thread_rng();
         let positions = get_tree_positions(Params {
             width: terrain.chunk_size,
             height: terrain.chunk_size,
-            min_radius: 1.5,
+            min_radius: 3.0,
             noise: &noise_map.data,
+            rng: &mut rng,
         });
 
         for position in positions {
             commands.entity(entity).with_children(|parent| {
                 let transform =
-                    Transform::from_translation(Vec3::new(position.x, 10.0, position.y));
+                    Transform::from_translation(Vec3::new(position.x, 10.0, position.y))
+                        .with_rotation(Quat::from_rotation_y(rng.gen_range(0.0..FRAC_2_PI)));
                 let tree = parent
                     .spawn((
                         Tree::rand(coords_to_u64(position)),
@@ -77,14 +84,13 @@ pub fn biome_system(
     }
 }
 
-fn get_tree_positions(params: Params) -> Vec<Vec2> {
-    let mut rng = rand::thread_rng(); // TODO: determinisic
+fn get_tree_positions<R: Rng>(params: Params<R>) -> Vec<Vec2> {
     let points = utils::poisson_disk_sampling(
         params.width as f64,
         params.height as f64,
         params.min_radius,
         30,
-        &mut rng,
+        params.rng,
     );
 
     points

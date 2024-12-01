@@ -327,11 +327,7 @@ impl Terrain {
                 parent.spawn((
                     MaterialMeshBundle {
                         mesh: mesh_handle,
-                        material: grass_desert.add(GrassDesert {
-                            grass: GREEN.into(),
-                            desert: RED.into(),
-                            noise_texture: biome_noise,
-                        }),
+                        material: grass_desert.add(GrassDesert::new(biome_noise)),
                         ..default()
                     },
                     collider,

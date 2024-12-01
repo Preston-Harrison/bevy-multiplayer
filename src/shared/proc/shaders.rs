@@ -1,4 +1,5 @@
 use bevy::{
+    color::palettes::css::GREEN,
     pbr::MaterialExtension,
     prelude::*,
     render::render_resource::{AsBindGroup, ShaderRef},
@@ -14,6 +15,16 @@ pub struct GrassDesert {
     #[texture(2)]
     #[sampler(3)]
     pub noise_texture: Handle<Image>,
+}
+
+impl GrassDesert {
+    pub fn new(noise_texture: Handle<Image>) -> Self {
+        Self {
+            grass: GREEN.into(),
+            desert: Color::srgba_u8(237, 201, 175, 255).into(),
+            noise_texture,
+        }
+    }
 }
 
 impl Material for GrassDesert {
