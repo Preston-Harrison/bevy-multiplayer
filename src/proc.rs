@@ -8,7 +8,6 @@ use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, PrimaryWindow};
 use bevy_rapier3d::prelude::*;
 
-use crate::shared::proc::shaders::GrassDesert;
 use crate::shared::proc::{Chunk, LoadsChunks, Terrain, TerrainConfig, TerrainPlugin};
 use crate::utils::toggle_cursor_grab_with_esc;
 
@@ -16,7 +15,7 @@ pub fn run() {
     App::new()
         .add_plugins((
             DefaultPlugins,
-            TerrainPlugin { is_server: false },
+            TerrainPlugin,
             FpsOverlayPlugin {
                 config: FpsOverlayConfig {
                     text_config: TextStyle {
@@ -70,12 +69,7 @@ fn toggle_debug_ui(
     config.enabled = debug_gizmos.0;
 }
 
-fn setup(
-    mut commands: Commands,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    mut grass_desert: ResMut<Assets<GrassDesert>>,
-    asset_server: Res<AssetServer>,
-) {
+fn setup(mut commands: Commands) {
     commands.insert_resource(TerrainConfig {
         terrain_frequency: vec![0.005, 0.01, 0.02],
         terrain_amplitude: vec![15.0, 5.0, 0.5],

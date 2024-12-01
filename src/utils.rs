@@ -3,6 +3,8 @@ use bevy::{
     window::{CursorGrabMode, PrimaryWindow},
 };
 use rand::Rng;
+use rand::SeedableRng;
+use rand_chacha::ChaCha20Rng;
 use std::f64;
 
 pub fn toggle_cursor_grab_with_esc(
@@ -253,4 +255,8 @@ pub fn poisson_disk_sampling<R: Rng>(
     }
 
     samples
+}
+
+pub fn create_rng_from_seed(seed: [u8; 32]) -> impl Rng {
+    ChaCha20Rng::from_seed(seed)
 }

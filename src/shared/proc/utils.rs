@@ -19,7 +19,6 @@ fn run_stuff(world: &mut World) {
 pub struct SnapToFloor {
     pub entity_to_move: Entity,
     pub set_visible: bool,
-    // pub entity_base: Entity,
 }
 
 impl SnapToFloor {

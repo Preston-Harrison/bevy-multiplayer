@@ -92,9 +92,7 @@ impl Plugin for Game {
             GizmoPlugin,
             ConsolePlugin,
             GroundedPlugin,
-            TerrainPlugin {
-                is_server: self.is_server,
-            },
+            TerrainPlugin,
             GunPlugin,
             HealthPlugin {
                 is_server: self.is_server,

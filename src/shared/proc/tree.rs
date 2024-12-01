@@ -16,12 +16,6 @@ pub struct Tree {
 }
 
 impl Tree {
-    pub fn new() -> Self {
-        Self {
-            tree_type: TreeType::Default,
-        }
-    }
-
     pub fn rand(seed: u64) -> Self {
         let tree_type = match seed % 9 {
             0 => TreeType::Default,
@@ -113,11 +107,11 @@ fn spawn_trees(
                     transform: Transform::default().with_scale(Vec3::splat(4.0)),
                     ..Default::default()
                 });
-                // parent.spawn((
-                //     RigidBody::Fixed,
-                //     Collider::cylinder(0.5, 0.05),
-                //     SpatialBundle::from_transform(Transform::from_xyz(0.0, 0.5, 0.0)),
-                // ));
+                parent.spawn((
+                    RigidBody::Fixed,
+                    Collider::cylinder(2.0, 0.2),
+                    SpatialBundle::from_transform(Transform::from_xyz(0.0, 0.5, 0.0)),
+                ));
             });
         }
     }

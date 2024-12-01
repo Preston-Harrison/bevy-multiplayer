@@ -1,7 +1,7 @@
 use std::f32::consts::PI;
 
 use bevy::{
-    color::palettes::css::{BLUE, GREEN, RED},
+    color::palettes::css::BLUE,
     prelude::*,
     render::{
         mesh::{Indices, PrimitiveTopology},
@@ -14,29 +14,22 @@ use bevy_inspector_egui::InspectorOptions;
 use bevy_rapier3d::prelude::*;
 use biome::Biome;
 use noise::{NoiseFn, Perlin, Simplex};
-use rock::RockPlugin;
 use shaders::GrassDesert;
 use utils::ProcUtilsPlugin;
 
 use self::tree::TreePlugin;
 
 pub mod biome;
-pub mod rock;
 pub mod shaders;
 pub mod tree;
 pub mod utils;
 
-pub struct TerrainPlugin {
-    pub is_server: bool,
-}
+pub struct TerrainPlugin;
 
 impl Plugin for TerrainPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
-            FixedUpdate,
-            (chunk_load_system, tree_spawn_system, biome::biome_system),
-        );
-        app.add_plugins((TreePlugin, RockPlugin, ProcUtilsPlugin));
+        app.add_systems(FixedUpdate, (chunk_load_system, biome::biome_system));
+        app.add_plugins((TreePlugin, ProcUtilsPlugin));
         app.add_plugins(MaterialPlugin::<GrassDesert>::default());
     }
 }
@@ -279,15 +272,15 @@ impl Terrain {
     }
 
     fn get_biome_noise(&self, chunk_pos: IVec2) -> Image {
-        let perlin = Simplex::new(3);
+        let noise_fn = Simplex::new(3);
         let mut data = vec![0; 10_000];
 
         for x in 0..self.chunk_size {
             for z in 0..100 {
-                let sample_x = (chunk_pos.x as f64 * self.chunk_size as f64 + x as f64) * 0.0159;
-                let sample_z = (chunk_pos.y as f64 * self.chunk_size as f64 + z as f64) * 0.0159;
+                let sample_x = (chunk_pos.x as f64 * self.chunk_size as f64 + x as f64) * 0.00659;
+                let sample_z = (chunk_pos.y as f64 * self.chunk_size as f64 + z as f64) * 0.00659;
                 data[x + 100 * z] =
-                    (perlin.get([sample_x, sample_z]) * 255.0).clamp(0.0, 255.0) as u8;
+                    (noise_fn.get([sample_x, sample_z]) * 255.0).clamp(0.0, 255.0) as u8;
             }
         }
 
@@ -319,15 +312,18 @@ impl Terrain {
             .expect("collider to be constructed");
         let mesh_handle = meshes.add(mesh);
         let biome_noise = images.add(self.get_biome_noise(chunk.position));
+        let biome = Biome::new(biome_noise.clone());
+        let grass_desert =
+            grass_desert.add(GrassDesert::from_biome(biome_noise, &biome.biome_blend));
 
         commands
             .entity(chunk_entity)
-            .insert(Biome::new(biome_noise.clone()))
+            .insert(biome)
             .with_children(|parent| {
                 parent.spawn((
                     MaterialMeshBundle {
                         mesh: mesh_handle,
-                        material: grass_desert.add(GrassDesert::new(biome_noise)),
+                        material: grass_desert,
                         ..default()
                     },
                     collider,
@@ -366,30 +362,6 @@ fn generate_chunks_around(position: IVec2, radius: i32) -> Vec<(IVec2, i32)> {
     }
 
     result
-}
-
-/// FIXME: this panics sometimes for some reason.
-/// Spawns trees in newly generated chunks.
-pub fn tree_spawn_system(
-    mut commands: Commands,
-    context: Res<RapierContext>,
-    chunks: Query<(Entity, &Chunk), Added<Chunk>>,
-    terrain: Option<Res<Terrain>>,
-) {
-    let Some(terrain) = terrain else {
-        return;
-    };
-    for (entity, chunk) in chunks.iter() {
-        if commands.get_entity(entity).is_none() {
-            // This can happen if the chunk is despawned in the same tick.
-            // See:
-            //  - https://github.com/bevyengine/bevy/issues/7118
-            //  - https://github.com/bevyengine/bevy/pull/15929
-            continue;
-        }
-        trace!("spawning trees for {:?}", chunk);
-        // terrain.spawn_trees_and_rocks(&mut commands, &context, chunk, entity);
-    }
 }
 
 #[derive(Component)]
