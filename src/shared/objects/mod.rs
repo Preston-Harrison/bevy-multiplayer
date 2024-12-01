@@ -26,10 +26,6 @@ impl NetworkObject {
         let random_number: u64 = rng.gen();
         Self::Dynamic(random_number)
     }
-
-    pub fn new_static(id: u64) -> Self {
-        Self::Static(id)
-    }
 }
 
 #[derive(Component, Clone, Debug)]

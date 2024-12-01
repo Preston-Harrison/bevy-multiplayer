@@ -62,11 +62,6 @@ struct NoiseLayer {
     frequency: f64,
 }
 
-struct NoiseMap {
-    noise: Perlin,
-    frequency: f64,
-}
-
 /// Represents a terrain chunk.
 #[derive(Resource)]
 pub struct Terrain {
@@ -76,10 +71,6 @@ pub struct Terrain {
     grid_spacing: usize,
     noise_layers: Vec<NoiseLayer>,
     tree_spawn_threshold: f64,
-}
-
-pub struct TerrainMaterials {
-    pub sand_dune: Handle<GrassDesert>,
 }
 
 impl Terrain {
@@ -163,32 +154,13 @@ impl Terrain {
         Vec3::new(self.chunk_size as f32, 0.0, self.chunk_size as f32) / 2.0
     }
 
-    /// Returns (data, x_num, z_num). Access: `data[grid_x][grid_z] = Vec2(world_x, world_z);`
-    fn generate_grid_points(
-        &self,
-        chunk_position: IVec2,
-        lod: usize,
-    ) -> (Vec<Vec<Vec2>>, usize, usize) {
-        let grid_points = (self.chunk_size / (lod * self.grid_spacing)) + 1;
-        let mut points = vec![vec![Vec2::ZERO; grid_points]; grid_points];
-        for z in 0..grid_points {
-            for x in 0..grid_points {
-                // Calculate world positions
-                let (world_x, world_z) = self.grid_point_to_world_position(
-                    chunk_position,
-                    IVec2::new(x as i32, z as i32),
-                    lod,
-                );
-                points[x][z] = Vec2::new(world_x as f32, world_z as f32);
-            }
-        }
-        return (points, grid_points, grid_points);
+    fn get_num_grid_points(&self, lod: usize) -> usize {
+        (self.chunk_size / (lod * self.grid_spacing)) + 1
     }
 
     /// Generates a terrain mesh for this chunk using layered noise maps.
-    fn generate_mesh(&self, chunk_pos: IVec2, level_of_detail: usize) -> Mesh {
-        let lod = level_of_detail;
-        let grid_points = (self.chunk_size / (lod * self.grid_spacing)) + 1;
+    fn generate_mesh(&self, chunk_pos: IVec2, lod: usize) -> Mesh {
+        let grid_points = self.get_num_grid_points(lod);
         let mut vertices = Vec::with_capacity(grid_points * grid_points);
         let mut uvs = Vec::with_capacity(grid_points * grid_points);
         let mut colors: Vec<[f32; 4]> = Vec::with_capacity(grid_points * grid_points);

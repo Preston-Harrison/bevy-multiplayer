@@ -2,22 +2,15 @@ use std::f32::consts::PI;
 
 use bevy::{ecs::system::RunSystemOnce, prelude::*};
 
-use super::proc::{shaders::GrassDesert, Terrain};
+use super::proc::Terrain;
 
 pub fn setup_scene_1(world: &mut World) {
     world.run_system_once(spawn_world_model);
     world.run_system_once(spawn_lights);
 }
 
-/// TODO: static network objects for procedurally generated terrain
-fn spawn_world_model(
-    mut commands: Commands,
-    asset_server: Res<AssetServer>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    mut grass_desert: ResMut<Assets<GrassDesert>>,
-) {
-    let terrain = Terrain::new_desert();
-    commands.insert_resource(terrain);
+fn spawn_world_model(mut commands: Commands) {
+    commands.insert_resource(Terrain::new_desert());
 }
 
 fn spawn_lights(mut commands: Commands) {
