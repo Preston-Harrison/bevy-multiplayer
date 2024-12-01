@@ -61,6 +61,7 @@ impl Plugin for PlayerClientPlugin {
             (
                 rotate_player,
                 rubber_band_player_camera.after(rotate_player),
+                set_sprint_fov,
             ),
         );
     }
@@ -313,6 +314,7 @@ pub fn read_input(
     let world_direction_xz = Vec3::new(world_direction.x, 0.0, world_direction.z);
     let input = Input {
         direction: world_direction_xz.normalize_or_zero(),
+        sprint: keyboard_input.pressed(KeyCode::ShiftLeft),
         jump: keyboard_input.pressed(KeyCode::Space),
         shot,
     };
@@ -760,6 +762,24 @@ fn sync_player_rotation(
             let bytes = bincode::serialize(&message).unwrap();
             client.send_message(DefaultChannel::Unreliable, bytes);
             break;
+        }
+    }
+}
+
+fn set_sprint_fov(ibuf: Res<InputBuffer>, mut proj: Query<&mut Projection, With<PlayerCamera>>) {
+    let Some(input) = ibuf.get_latest() else {
+        return;
+    };
+
+    let Ok(mut proj) = proj.get_single_mut() else {
+        return;
+    };
+
+    if let Projection::Perspective(ref mut perspective) = *proj {
+        if input.input.sprint {
+            perspective.fov = perspective.fov.lerp(70f32.to_radians(), 0.1);
+        } else {
+            perspective.fov = perspective.fov.lerp(60f32.to_radians(), 0.1);
         }
     }
 }

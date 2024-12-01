@@ -76,6 +76,7 @@ pub enum ShotType {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Input {
     direction: Vec3,
+    sprint: bool,
     jump: bool,
     shot: Option<Shot>,
 }
@@ -119,7 +120,8 @@ fn apply_input(
     player: &mut Player,
     grounded: &mut Grounded,
 ) {
-    let movement = input.direction * 5.0 * time.delta_seconds();
+    let speed = if input.sprint { 10.0 } else { 5.0 };
+    let movement = input.direction * speed * time.delta_seconds();
     if input.jump && grounded.is_grounded() && player.jump_cooldown_timer.finished() {
         player.kinematics.update(false, true);
         player.jump_cooldown_timer.reset();
