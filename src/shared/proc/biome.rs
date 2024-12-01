@@ -55,9 +55,13 @@ pub fn biome_system(
     mut commands: Commands,
     mut query: Query<(&mut Biome, Entity)>,
     images: Res<Assets<Image>>,
-    terrain: Res<Terrain>,
+    terrain: Option<Res<Terrain>>,
     mut snap_to_floor: EventWriter<SnapToFloor>,
 ) {
+    let Some(terrain) = terrain else {
+        return;
+    };
+
     for (mut biome, entity) in query.iter_mut() {
         if biome.trees_loaded {
             continue;
@@ -67,7 +71,7 @@ pub fn biome_system(
         };
         biome.trees_loaded = true;
 
-        // Seed from first 32 pixels. For deterministic tree positioning.
+        // Seed from first 32 pixels for deterministic tree positioning.
         let seed: [u8; 32] = noise_map.data[..32]
             .try_into()
             .expect("seed to be 32 bytes");
