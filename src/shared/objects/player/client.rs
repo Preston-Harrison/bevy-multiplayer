@@ -197,12 +197,18 @@ pub fn rotate_player(
         return;
     };
 
+    let pitch_min = -85_f32.to_radians();
+    let pitch_max = 85_f32.to_radians();
+
+    let mut current_pitch = player_head_t.rotation.to_euler(EulerRot::XYZ).0;
+
     for motion in mouse_motion.read() {
         let yaw = -motion.delta.x * 0.003;
         let pitch = -motion.delta.y * 0.002;
-        // Order of rotations is important, see <https://gamedev.stackexchange.com/a/136175/103059>
+
         player_t.rotate_y(yaw);
-        player_head_t.rotate_local_x(pitch);
+        current_pitch = (current_pitch + pitch).clamp(pitch_min, pitch_max);
+        player_head_t.rotation = Quat::from_rotation_x(current_pitch);
     }
 }
 
