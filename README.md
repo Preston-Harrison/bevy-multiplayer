@@ -29,3 +29,7 @@ for the implementation.
 
 ## TODO:
 - Change message readers to use bevy's event system
+- Muzzle flash, bullet decals, tracers
+- Render gun with different camera
+- Gun animations (recoil, sprint wobble)
+- Damage flinch
