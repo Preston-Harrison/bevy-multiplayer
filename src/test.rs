@@ -9,7 +9,7 @@ use bevy_inspector_egui::quick::WorldInspectorPlugin;
 use crate::{
     shared::objects::{
         gun::BulletPoint,
-        tracer::{SpawnBulletEffect, TracerPlugin},
+        tracer::{Tracer, TracerPlugin},
     },
     utils::{
         freecam::{FreeCamera, FreeCameraPlugin},
@@ -165,16 +165,19 @@ fn toggle_collider_visual(
 }
 
 fn spawn_tracer(
+    mut commands: Commands,
     bullet_point: Query<&GlobalTransform, With<BulletPoint>>,
     key: Res<ButtonInput<KeyCode>>,
-    mut tracers: EventWriter<SpawnBulletEffect>,
 ) {
     let Ok(start) = bullet_point.get_single() else {
         return;
     };
     if key.just_pressed(KeyCode::KeyT) {
         let transform = start.compute_transform();
-        let end = transform.translation + transform.forward() * -10.0;
-        tracers.send(SpawnBulletEffect::new(transform.translation, end));
+        let end = transform.translation + transform.forward() * 10.0;
+        commands.spawn((
+            SpatialBundle::from_transform(transform),
+            Tracer { end },
+        ));
     }
 }

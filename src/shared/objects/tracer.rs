@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use bevy::{
     color::palettes::css::{WHITE, YELLOW},
+    ecs::component::{ComponentHooks, StorageType},
     pbr::NotShadowCaster,
     prelude::*,
     render::render_resource::{AsBindGroup, ShaderRef},
@@ -16,36 +17,82 @@ impl Plugin for TracerPlugin {
             app.add_plugins(HanabiPlugin);
         }
         app.add_plugins(MaterialPlugin::<TracerShader>::default());
-        app.add_event::<SpawnBulletEffect>();
         app.add_systems(Startup, setup_muzzle_flash_particle_system);
-        app.add_systems(Update, (add_tracer, despawn_tracers));
+        app.add_systems(Update, despawn_tracers);
     }
 }
 
 #[derive(Resource, Deref)]
 struct MuzzleFlashEffect(Handle<EffectAsset>);
 
-/// Spawns a tracer, muzzle flash, impact effect, and decal.
-#[derive(Event)]
-pub struct SpawnBulletEffect {
-    pub start: Vec3,
+// Define a marker component for tracers
+pub struct Tracer {
     pub end: Vec3,
-    pub hit_normal: Option<Vec3>,
 }
 
-impl SpawnBulletEffect {
-    pub fn new(start: Vec3, end: Vec3) -> Self {
-        Self {
-            start,
-            end,
-            hit_normal: None,
-        }
+impl Component for Tracer {
+    const STORAGE_TYPE: StorageType = StorageType::Table;
+
+    fn register_component_hooks(hooks: &mut ComponentHooks) {
+        hooks.on_add(|mut world, entity, _component_id| {
+            let despawn_after = DespawnAfter {
+                spawned_at: world.resource::<Time>().elapsed(),
+                lifetime: Duration::from_millis(50),
+            };
+
+            let tracer = world.get::<Self>(entity).unwrap();
+            let tracer_start = world.get::<Transform>(entity).unwrap().translation;
+            let asset_server = world.resource::<AssetServer>();
+            let muzzle_flash = world.resource::<MuzzleFlashEffect>();
+            let muzzle_flash_handle = muzzle_flash.0.clone();
+
+            // Calculate the midpoint and rotation for the tracer
+            let direction = tracer.end - tracer_start;
+            let distance = direction.length();
+            let cylinder = Cylinder::new(0.02, distance).mesh().build();
+            let tracer_mesh = asset_server.add(cylinder);
+            let tracer_material = asset_server.add(TracerShader {
+                tracer_start: WHITE.into(),
+                tracer_end: YELLOW.into(),
+            });
+
+            // Calculate the rotation to align the tracer with the direction vector
+            let rotation = Quat::from_rotation_arc(Vec3::Y, direction.normalize());
+
+            let mut transform = Transform::from_rotation(rotation);
+            transform.translation += direction / 2.0;
+
+            world
+                .commands()
+                .entity(entity)
+                .insert(despawn_after)
+                .with_children(|parent| {
+                    parent.spawn((
+                        MaterialMeshBundle {
+                            material: tracer_material,
+                            mesh: tracer_mesh,
+                            transform,
+                            ..default()
+                        },
+                        NotShadowCaster,
+                    ));
+                    parent.spawn((PointLightBundle {
+                        point_light: PointLight {
+                            color: YELLOW.into(),
+                            shadows_enabled: true,
+                            intensity: 40_000.0,
+                            ..default()
+                        },
+                        ..default()
+                    },));
+                    parent.spawn((ParticleEffectBundle {
+                        effect: ParticleEffect::new(muzzle_flash_handle),
+                        ..default()
+                    },));
+                });
+        });
     }
 }
-
-// Define a marker component for tracers
-#[derive(Component)]
-struct Tracer;
 
 #[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
 struct TracerShader {
@@ -67,72 +114,6 @@ struct DespawnAfter {
     lifetime: Duration,
 }
 
-fn add_tracer(
-    mut commands: Commands,
-    asset_server: Res<AssetServer>,
-    mut tracers: EventReader<SpawnBulletEffect>,
-    muzzle_flash: Res<MuzzleFlashEffect>,
-    time: Res<Time>,
-) {
-    for tracer in tracers.read() {
-        // Calculate the midpoint and rotation for the tracer
-        let direction = tracer.end - tracer.start;
-        let distance = direction.length();
-        let midpoint = tracer.start + (direction / 2.0);
-        let cylinder = Cylinder::new(0.02, distance).mesh().build();
-        let tracer_mesh = asset_server.add(cylinder);
-        let tracer_material = asset_server.add(TracerShader {
-            tracer_start: WHITE.into(),
-            tracer_end: YELLOW.into(),
-        });
-
-        // Calculate the rotation to align the tracer with the direction vector
-        let rotation = Quat::from_rotation_arc(Vec3::Y, direction.normalize());
-
-        let mut transform = Transform::from_rotation(rotation);
-        transform.translation += midpoint;
-
-        let despawn_after = DespawnAfter {
-            spawned_at: time.elapsed(),
-            lifetime: Duration::from_millis(50),
-        };
-
-        // Spawn the tracer entity
-        commands.spawn((
-            MaterialMeshBundle {
-                material: tracer_material,
-                mesh: tracer_mesh,
-                transform,
-                ..default()
-            },
-            NotShadowCaster,
-            Tracer,
-            despawn_after.clone(),
-        ));
-        commands.spawn((
-            PointLightBundle {
-                point_light: PointLight {
-                    color: YELLOW.into(),
-                    shadows_enabled: true,
-                    intensity: 40_000.0,
-                    ..default()
-                },
-                transform: Transform::from_translation(tracer.start),
-                ..default()
-            },
-            despawn_after.clone(),
-        ));
-        commands.spawn((
-            ParticleEffectBundle {
-                effect: ParticleEffect::new(muzzle_flash.clone()),
-                transform: Transform::from_translation(tracer.start),
-                ..default()
-            },
-            despawn_after,
-        ));
-    }
-}
-
 fn despawn_tracers(
     mut commands: Commands,
     tracers: Query<(Entity, &DespawnAfter)>,
@@ -149,7 +130,7 @@ fn setup_muzzle_flash_particle_system(
     mut effects: ResMut<Assets<EffectAsset>>,
     mut commands: Commands,
 ) {
-let writer = ExprWriter::new();
+    let writer = ExprWriter::new();
 
     // Position the particle laterally within a small radius.
     let init_xz_pos = SetPositionCircleModifier {
@@ -172,7 +153,7 @@ let writer = ExprWriter::new();
     // Make the particles move backwards at a constant speed.
     let init_velocity = SetAttributeModifier::new(
         Attribute::VELOCITY,
-        writer.lit(Vec3::new(0.0, 0.0, -2.0)).expr(),
+        (writer.rand(ScalarType::Float) * writer.lit(Vec3::new(0.0, 0.0, -2.0))).expr(),
     );
 
     // Make the particles shrink over time.
