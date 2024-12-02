@@ -3,6 +3,7 @@
 use std::env;
 
 mod client;
+mod ik;
 mod message;
 mod proc;
 mod server;
@@ -19,6 +20,7 @@ fn main() {
         Some("client") => client::run(),
         Some("proc") => proc::run(),
         Some("test") => test::run(),
+        Some("ik") => ik::run(),
         Some(v) => panic!("{v} is not a valid run mode"),
         None => panic!("no run mode passed"),
     }

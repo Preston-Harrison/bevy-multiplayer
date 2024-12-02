@@ -15,6 +15,7 @@ use self::{
 };
 
 pub mod console;
+pub mod ik;
 pub mod objects;
 pub mod physics;
 pub mod proc;
