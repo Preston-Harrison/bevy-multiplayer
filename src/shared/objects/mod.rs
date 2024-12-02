@@ -11,6 +11,7 @@ pub mod grounded;
 pub mod gun;
 pub mod health;
 pub mod player;
+pub mod tracer;
 
 #[derive(Serialize, Deserialize, Component, Clone, Debug, Hash, PartialEq, Eq)]
 pub enum NetworkObject {

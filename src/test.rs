@@ -1,12 +1,20 @@
+use std::f32::consts::PI;
+
 use bevy::{
     color::palettes::css::{BLUE, GREEN, RED},
     prelude::*,
 };
 use bevy_inspector_egui::quick::WorldInspectorPlugin;
 
-use crate::utils::{
-    freecam::{FreeCamera, FreeCameraPlugin},
-    toggle_cursor_grab_with_esc,
+use crate::{
+    shared::objects::{
+        gun::BulletPoint,
+        tracer::{SpawnBulletEffect, TracerPlugin},
+    },
+    utils::{
+        freecam::{FreeCamera, FreeCameraPlugin},
+        toggle_cursor_grab_with_esc,
+    },
 };
 
 pub fn run() {
@@ -14,6 +22,7 @@ pub fn run() {
         .add_plugins((
             DefaultPlugins,
             FreeCameraPlugin,
+            TracerPlugin,
             WorldInspectorPlugin::new(),
         ))
         .add_systems(Startup, setup)
@@ -23,6 +32,7 @@ pub fn run() {
                 snap_to_game_cam,
                 toggle_collider_visual,
                 toggle_cursor_grab_with_esc,
+                spawn_tracer,
             ),
         )
         .run();
@@ -90,7 +100,7 @@ fn setup(
                                         .from_asset("kenney-weapons/blasterD.glb"),
                                 ),
                                 transform: Transform::from_translation(Vec3::new(0.2, -1.2, -0.9))
-                                    .with_rotation(Quat::from_euler(EulerRot::XYZ, 0.0, 3.1, 0.0)),
+                                    .with_rotation(Quat::from_euler(EulerRot::XYZ, 0.0, PI, 0.0)),
                                 ..default()
                             },
                             Name::new("Gun"),
@@ -109,6 +119,7 @@ fn setup(
                                     ..Default::default()
                                 },
                                 Name::new("Bullet Point"),
+                                BulletPoint,
                             ));
                         });
                 });
@@ -151,4 +162,19 @@ fn toggle_collider_visual(
             Visibility::Inherited => Visibility::Hidden,
         };
     };
+}
+
+fn spawn_tracer(
+    bullet_point: Query<&GlobalTransform, With<BulletPoint>>,
+    key: Res<ButtonInput<KeyCode>>,
+    mut tracers: EventWriter<SpawnBulletEffect>,
+) {
+    let Ok(start) = bullet_point.get_single() else {
+        return;
+    };
+    if key.just_pressed(KeyCode::KeyT) {
+        let transform = start.compute_transform();
+        let end = transform.translation + transform.forward() * -10.0;
+        tracers.send(SpawnBulletEffect::new(transform.translation, end));
+    }
 }

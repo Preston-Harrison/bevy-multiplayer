@@ -1,4 +1,6 @@
 /target
 .DS_Store
-assets/sprout-lands-pack/
-assets/
+assets/*
+
+!assets/shaders/
+!assets/shaders/**
