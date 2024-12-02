@@ -1,9 +1,4 @@
-use std::time::Duration;
-
-use bevy::{
-    color::palettes::css::{GREEN, YELLOW},
-    prelude::*,
-};
+use bevy::prelude::*;
 
 pub struct GizmoPlugin;
 
@@ -40,22 +35,4 @@ fn draw_raycast(
             }
         }
     }
-}
-
-pub fn spawn_bullet_tracer(
-    commands: &mut Commands,
-    ray_pos: Vec3,
-    ray_dir: Vec3,
-    length: f32,
-    hit: bool,
-) {
-    let to = ray_pos + (ray_dir * length);
-    let cast = RaycastVisual {
-        despawn_timer: Timer::new(Duration::from_millis(100), TimerMode::Once),
-        from: ray_pos,
-        is_arrow: false,
-        to,
-        color: if hit { GREEN.into() } else { YELLOW.into() },
-    };
-    commands.spawn(cast);
 }

@@ -175,9 +175,6 @@ fn spawn_tracer(
     if key.just_pressed(KeyCode::KeyT) {
         let transform = start.compute_transform();
         let end = transform.translation + transform.forward() * 10.0;
-        commands.spawn((
-            SpatialBundle::from_transform(transform),
-            Tracer { end },
-        ));
+        commands.spawn((SpatialBundle::from_transform(transform), Tracer { end }));
     }
 }

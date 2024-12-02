@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 use bevy_renet::renet::{DefaultChannel, RenetServer};
-use objects::{gun::GunPlugin, health::HealthPlugin};
+use objects::{gun::GunPlugin, health::HealthPlugin, tracer::TracerPlugin};
 use proc::TerrainPlugin;
 
 use crate::message::{client::MessageReaderOnClient, server::ReliableMessageFromServer};
@@ -97,6 +97,7 @@ impl Plugin for Game {
             HealthPlugin {
                 is_server: self.is_server,
             },
+            TracerPlugin,
         ));
         if !self.is_server {
             app.add_systems(FixedUpdate, despawn.in_set(GameLogic::Spawn));

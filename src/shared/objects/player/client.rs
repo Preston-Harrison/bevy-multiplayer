@@ -22,10 +22,10 @@ use crate::{
     },
     shared::{
         objects::{
-            gizmo::spawn_bullet_tracer,
             grounded::Grounded,
             gun::{Gun, GunType, LocalPlayerGun},
             player::PlayerHead,
+            tracer::Tracer,
             LastSyncTracker, NetworkObject,
         },
         physics::apply_kinematics,
@@ -399,7 +399,12 @@ fn get_shot(
     );
     let shot_type = match raycast {
         Some((entity, toi)) => {
-            spawn_bullet_tracer(commands, bullet_ray_pos, bullet_ray_dir, toi, true);
+            commands.spawn((
+                Tracer {
+                    end: bullet_ray_pos + bullet_ray_dir * toi,
+                },
+                SpatialBundle::from_transform(Transform::from_translation(bullet_ray_pos)),
+            ));
             let impact_point = bullet_ray_pos + (bullet_ray_dir * toi);
             match net_objs.get(entity).ok() {
                 Some((obj, transform)) => {
@@ -415,13 +420,12 @@ fn get_shot(
             }
         }
         None => {
-            spawn_bullet_tracer(
-                commands,
-                bullet_ray_pos,
-                bullet_ray_dir,
-                bullet_range,
-                false,
-            );
+            commands.spawn((
+                Tracer {
+                    end: bullet_ray_pos + bullet_ray_dir * bullet_range,
+                },
+                SpatialBundle::from_transform(Transform::from_translation(bullet_ray_pos)),
+            ));
             Some(ShotType::ShotNothing(ShotNothing {
                 vector: bullet_ray_dir * bullet_range,
             }))
@@ -480,25 +484,22 @@ pub fn recv_player_shot(
         };
 
         match &shot.shot_type {
-            ShotType::ShotNothing(shot) => match shot.vector.try_normalize() {
-                Some(vector) => {
-                    spawn_bullet_tracer(
-                        &mut commands,
-                        shooter_pos,
-                        vector,
-                        shot.vector.length(),
-                        false,
-                    );
-                }
-                _ => warn!("got zero valued shot vector"),
-            },
-            ShotType::ShotPosition(shot) => spawn_bullet_tracer(
-                &mut commands,
-                shooter_pos,
-                -shooter_pos + shot.position,
-                (-shooter_pos + shot.position).length(),
-                true,
-            ),
+            ShotType::ShotNothing(shot) => {
+                commands.spawn((
+                    Tracer {
+                        end: shooter_pos + shot.vector,
+                    },
+                    SpatialBundle::from_transform(Transform::from_translation(shooter_pos)),
+                ));
+            }
+            ShotType::ShotPosition(shot) => {
+                commands.spawn((
+                    Tracer {
+                        end: shooter_pos + (-shooter_pos + shot.position),
+                    },
+                    SpatialBundle::from_transform(Transform::from_translation(shooter_pos)),
+                ));
+            }
             ShotType::ShotTarget(shot) => {
                 let target_pos = net_obj_query
                     .iter()
@@ -510,13 +511,12 @@ pub fn recv_player_shot(
                 };
                 let target_shot_pos = target_pos.translation + shot.relative_position;
                 let ray = target_shot_pos - shooter_pos;
-                spawn_bullet_tracer(
-                    &mut commands,
-                    shooter_pos,
-                    ray.normalize(),
-                    ray.length(),
-                    true,
-                );
+                commands.spawn((
+                    Tracer {
+                        end: shooter_pos + ray,
+                    },
+                    SpatialBundle::from_transform(Transform::from_translation(shooter_pos)),
+                ));
             }
         }
     }

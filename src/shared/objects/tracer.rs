@@ -25,8 +25,8 @@ impl Plugin for TracerPlugin {
 #[derive(Resource, Deref)]
 struct MuzzleFlashEffect(Handle<EffectAsset>);
 
-// Define a marker component for tracers
 pub struct Tracer {
+    /// End is in global world space.
     pub end: Vec3,
 }
 
@@ -58,9 +58,10 @@ impl Component for Tracer {
 
             // Calculate the rotation to align the tracer with the direction vector
             let rotation = Quat::from_rotation_arc(Vec3::Y, direction.normalize());
-
             let mut transform = Transform::from_rotation(rotation);
             transform.translation += direction / 2.0;
+
+            let particle_rotation = Quat::from_rotation_arc(Vec3::NEG_Z, direction.normalize());
 
             world
                 .commands()
@@ -87,6 +88,7 @@ impl Component for Tracer {
                     },));
                     parent.spawn((ParticleEffectBundle {
                         effect: ParticleEffect::new(muzzle_flash_handle),
+                        transform: Transform::from_rotation(particle_rotation),
                         ..default()
                     },));
                 });
@@ -175,6 +177,7 @@ fn setup_muzzle_flash_particle_system(
     // Add the effect.
     let handle = effects.add(
         EffectAsset::new(256, Spawner::burst(16.0.into(), 0.45.into()), module)
+            .with_simulation_space(SimulationSpace::Local)
             .with_name("cartoon explosion")
             .init(init_xz_pos)
             .init(init_age)
