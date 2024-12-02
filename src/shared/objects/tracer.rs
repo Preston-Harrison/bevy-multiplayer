@@ -35,9 +35,11 @@ impl Component for Tracer {
 
     fn register_component_hooks(hooks: &mut ComponentHooks) {
         hooks.on_add(|mut world, entity, _component_id| {
+            let current_time = world.resource::<Time>().elapsed();
+            let lifetime = Duration::from_millis(100);
             let despawn_after = DespawnAfter {
-                spawned_at: world.resource::<Time>().elapsed(),
-                lifetime: Duration::from_millis(50),
+                spawned_at: current_time,
+                lifetime,
             };
 
             let tracer = world.get::<Self>(entity).unwrap();
@@ -54,6 +56,9 @@ impl Component for Tracer {
             let tracer_material = asset_server.add(TracerShader {
                 tracer_start: WHITE.into(),
                 tracer_end: YELLOW.into(),
+                time_spawned: current_time.as_secs_f32(),
+                time_alive: lifetime.as_secs_f32(),
+                tracer_length: 0.3,
             });
 
             // Calculate the rotation to align the tracer with the direction vector
@@ -102,6 +107,13 @@ struct TracerShader {
     tracer_start: LinearRgba,
     #[uniform(1)]
     tracer_end: LinearRgba,
+
+    #[uniform(2)]
+    time_spawned: f32,
+    #[uniform(3)]
+    time_alive: f32,
+    #[uniform(4)]
+    tracer_length: f32,
 }
 
 impl Material for TracerShader {
