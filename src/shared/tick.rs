@@ -67,7 +67,6 @@ fn recv_tick_update(reader: Res<MessageReaderOnClient>, mut curr_tick: ResMut<Ti
         if let ReliableMessageFromServer::TickSync(sync) = msg {
             // TODO: figure out why this is out of sync.
             let next_tick = get_client_tick(sync.tick, sync.unix_millis);
-            info!("tick updated from {:?} to {:?}", *curr_tick, next_tick);
             *curr_tick = next_tick;
         }
     }
@@ -87,7 +86,6 @@ fn send_tick_update(
         });
         let bytes = bincode::serialize(&message).unwrap();
         server.broadcast_message(DefaultChannel::ReliableUnordered, bytes);
-        info!("tick sync sent");
     }
 }
 
