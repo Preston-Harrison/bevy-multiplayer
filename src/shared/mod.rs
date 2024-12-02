@@ -8,7 +8,7 @@ use crate::message::{client::MessageReaderOnClient, server::ReliableMessageFromS
 use self::{
     console::ConsolePlugin,
     objects::{
-        ball::BallPlugin, gizmo::GizmoPlugin, grounded::GroundedPlugin, player::PlayerPlugin,
+        gizmo::GizmoPlugin, grounded::GroundedPlugin, player::PlayerPlugin, worm::WormPlugin,
         NetworkObject,
     },
     physics::PhysicsPlugin,
@@ -38,6 +38,7 @@ pub enum AppState {
 /// - Spawn
 /// - Sync
 /// - Game
+/// - PreKinematics
 /// - Kinematics
 /// - End
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
@@ -52,6 +53,9 @@ pub enum GameLogic {
     /// Server sends data here, client receives data here.
     Sync,
     Game,
+    /// Do stuff like updating kinematic velocities here.
+    PreKinematics,
+    /// Actual kinematics are applied here.
     Kinematics,
     End,
 }
@@ -81,9 +85,6 @@ pub struct Game {
 impl Plugin for Game {
     fn build(&self, app: &mut App) {
         app.add_plugins((
-            BallPlugin {
-                is_server: self.is_server,
-            },
             PlayerPlugin {
                 is_server: self.is_server,
             },
@@ -99,9 +100,12 @@ impl Plugin for Game {
                 is_server: self.is_server,
             },
             TracerPlugin,
+            WormPlugin,
         ));
         if !self.is_server {
             app.add_systems(FixedUpdate, despawn.in_set(GameLogic::Spawn));
+        } else {
+            app.init_resource::<IsServer>();
         }
         app.configure_sets(
             FixedUpdate,
@@ -112,6 +116,7 @@ impl Plugin for Game {
                 GameLogic::Spawn,
                 GameLogic::Sync,
                 GameLogic::Game,
+                GameLogic::PreKinematics,
                 GameLogic::Kinematics,
                 GameLogic::End,
             )
@@ -132,3 +137,6 @@ pub fn despawn_recursive_and_broadcast(
     server.broadcast_message(DefaultChannel::ReliableUnordered, bytes);
     commands.entity(entity).despawn_recursive();
 }
+
+#[derive(Resource, Default)]
+pub struct IsServer;

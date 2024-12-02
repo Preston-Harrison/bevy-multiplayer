@@ -5,13 +5,13 @@ use std::marker::PhantomData;
 
 use super::tick::Tick;
 
-pub mod ball;
 pub mod gizmo;
 pub mod grounded;
 pub mod gun;
 pub mod health;
 pub mod player;
 pub mod tracer;
+pub mod worm;
 
 #[derive(Serialize, Deserialize, Component, Clone, Debug, Hash, PartialEq, Eq)]
 pub enum NetworkObject {
@@ -26,6 +26,10 @@ impl NetworkObject {
         let mut rng = rand::thread_rng();
         let random_number: u64 = rng.gen();
         Self::Dynamic(random_number)
+    }
+
+    pub fn new_static(id: u64) -> Self {
+        Self::Static(id)
     }
 }
 

@@ -5,6 +5,7 @@ use super::{
     objects::{
         grounded::{set_grounded, Grounded},
         player::Player,
+        worm::Worm,
         NetworkObject,
     },
     GameLogic,
@@ -23,26 +24,33 @@ impl Plugin for PhysicsPlugin {
         }
         app.add_systems(
             FixedUpdate,
-            (apply_kinematics_system.in_set(GameLogic::Kinematics),),
+            (
+                apply_kinematics_system::<Player>.in_set(GameLogic::Kinematics),
+                apply_kinematics_system::<Worm>.in_set(GameLogic::Kinematics),
+            ),
         );
     }
 }
 
+pub trait VelocityCalculator: Component {
+    fn get_velocity(&self) -> Vec3;
+}
+
 #[derive(QueryData)]
 #[query_data(mutable)]
-pub struct KinematicsQuery {
+pub struct KinematicsQuery<T: VelocityCalculator> {
     entity: Entity,
     net_obj: &'static NetworkObject,
     controller: &'static KinematicCharacterController,
     transform: &'static mut Transform,
     collider: &'static Collider,
-    player: &'static mut Player,
+    kinematics: &'static T,
     grounded: Option<&'static mut Grounded>,
 }
 
-fn apply_kinematics_system(
+fn apply_kinematics_system<T: VelocityCalculator>(
     mut context: ResMut<RapierContext>,
-    mut query: Query<KinematicsQuery>,
+    mut query: Query<KinematicsQuery<T>>,
     time: Res<Time>,
 ) {
     for mut item in query.iter_mut() {
@@ -52,7 +60,7 @@ fn apply_kinematics_system(
             item.controller,
             &mut item.transform,
             item.collider,
-            item.player.kinematics.get_velocity(),
+            item.kinematics.get_velocity(),
             item.grounded.as_deref_mut(),
             time.delta_seconds(),
         );

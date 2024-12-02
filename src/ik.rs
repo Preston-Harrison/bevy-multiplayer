@@ -93,7 +93,8 @@ fn setup(
                                     mesh: meshes.add(Sphere::new(0.1)),
                                     ..default()
                                 })
-                                .insert(Name::new("4")).insert(Foot);
+                                .insert(Name::new("4"))
+                                .insert(Foot);
                         });
                 });
         });

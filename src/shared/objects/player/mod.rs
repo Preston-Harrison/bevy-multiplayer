@@ -5,7 +5,10 @@ use bevy_rapier3d::prelude::*;
 use serde::{Deserialize, Serialize};
 use spawn::{spawn_players_from_spawn_requests, PlayerSpawnRequest};
 
-use crate::shared::{physics::char_ctrl_to_move_opts, GameLogic};
+use crate::shared::{
+    physics::{char_ctrl_to_move_opts, VelocityCalculator},
+    GameLogic,
+};
 
 use self::{client::PlayerClientPlugin, server::PlayerServerPlugin};
 
@@ -215,5 +218,11 @@ impl PlayerKinematics {
         }
 
         false // No differences found
+    }
+}
+
+impl VelocityCalculator for Player {
+    fn get_velocity(&self) -> Vec3 {
+        self.kinematics.get_velocity()
     }
 }
