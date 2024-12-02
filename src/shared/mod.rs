@@ -53,7 +53,8 @@ pub enum GameLogic {
     /// Server sends data here, client receives data here.
     Sync,
     Game,
-    /// Do stuff like updating kinematic velocities here.
+    /// Do stuff like updating kinematic velocities here. Can also be done earlier,
+    /// this is just convenient for running logic right before kinematics are applied.
     PreKinematics,
     /// Actual kinematics are applied here.
     Kinematics,
@@ -100,7 +101,9 @@ impl Plugin for Game {
                 is_server: self.is_server,
             },
             TracerPlugin,
-            WormPlugin,
+            WormPlugin {
+                is_server: self.is_server,
+            },
         ));
         if !self.is_server {
             app.add_systems(FixedUpdate, despawn.in_set(GameLogic::Spawn));

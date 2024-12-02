@@ -6,24 +6,39 @@ use bevy::{
     prelude::*,
 };
 use bevy_rapier3d::prelude::*;
+use bevy_renet::renet::{DefaultChannel, RenetServer};
 
-use crate::shared::{physics::VelocityCalculator, GameLogic, IsServer, NetworkObject};
+use crate::{
+    message::{client::MessageReaderOnClient, server::UnreliableMessageFromServer},
+    shared::{physics::VelocityCalculator, tick::Tick, GameLogic, IsServer, NetworkObject},
+};
 
-use super::{grounded::Grounded, health::Health};
+use super::{grounded::Grounded, health::Health, LastSyncTracker};
 
-pub struct WormPlugin;
+pub struct WormPlugin {
+    pub is_server: bool,
+}
 
 impl Plugin for WormPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(FixedUpdate, (
-            setup.in_set(GameLogic::Spawn),
-            tick_kinematics.in_set(GameLogic::PreKinematics)
-        ));
+        app.add_systems(
+            FixedUpdate,
+            (
+                setup.in_set(GameLogic::Spawn),
+                tick_kinematics.in_set(GameLogic::PreKinematics),
+            ),
+        );
+        if self.is_server {
+            app.add_systems(FixedUpdate, send_transforms.in_set(GameLogic::Sync));
+        } else {
+            app.add_systems(FixedUpdate, recv_transforms.in_set(GameLogic::Sync));
+        }
     }
 }
 
 pub struct Worm {
     kinematics: WormKinematics,
+    spawn_tick: Tick,
 }
 
 impl VelocityCalculator for Worm {
@@ -55,12 +70,14 @@ impl Component for Worm {
                     Grounded::default(),
                 ));
             } else {
+                let spawn_tick = world.get::<Worm>(entity).unwrap().spawn_tick.clone();
                 world.commands().entity(entity).insert((
                     mesh,
                     material,
                     RigidBody::KinematicPositionBased,
                     Collider::ball(0.5),
                     Health::new(50.0),
+                    LastSyncTracker::<Transform>::new(spawn_tick),
                 ));
             }
         });
@@ -73,6 +90,7 @@ impl Default for Worm {
             kinematics: WormKinematics {
                 time_in_air: AirTime::Grounded,
             },
+            spawn_tick: Tick::new(0),
         }
     }
 }
@@ -139,5 +157,41 @@ fn tick_kinematics(mut worms: Query<(&mut Worm, &Grounded)>, time: Res<Time>) {
     for (mut worm, grounded) in worms.iter_mut() {
         worm.kinematics.update(grounded.is_grounded());
         worm.kinematics.tick(time.delta());
+    }
+}
+
+fn send_transforms(
+    mut server: ResMut<RenetServer>,
+    worms: Query<(&Transform, &NetworkObject), With<Worm>>,
+    tick: Res<Tick>,
+) {
+    for (worm_t, net_obj) in worms.iter() {
+        let message =
+            UnreliableMessageFromServer::TransformSync(net_obj.clone(), *worm_t, tick.clone());
+        let bytes = bincode::serialize(&message).unwrap();
+        server.broadcast_message(DefaultChannel::Unreliable, bytes);
+    }
+}
+
+fn recv_transforms(
+    reader: Res<MessageReaderOnClient>,
+    mut worms: Query<
+        (
+            &mut Transform,
+            &NetworkObject,
+            &mut LastSyncTracker<Transform>,
+        ),
+        With<Worm>,
+    >,
+) {
+    for msg in reader.unreliable_messages() {
+        let UnreliableMessageFromServer::TransformSync(net_obj, new_t, tick) = msg else {
+            continue;
+        };
+        for (mut t, obj, mut sync) in worms.iter_mut() {
+            if obj == net_obj && sync.should_update(*tick) {
+                *t = *new_t;
+            }
+        }
     }
 }
